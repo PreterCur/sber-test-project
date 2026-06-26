@@ -41,5 +41,5 @@ direct_dependencies:
 - espressif/button
 - espressif/led_strip
 manifest_hash: 7c11f59984b7d2182a13d09546afe2aba9880e1419abc0b3b5d83a5ff1fa1c45
-target: esp32
+target: esp32s3
 version: 3.0.0
