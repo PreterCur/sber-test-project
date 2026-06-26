@@ -9,11 +9,15 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include "led_strip.h"
+#include "freertos/queue.h"
 
+#include "esp_log.h"
+
+#include "driver/gpio.h"
+#include "led_strip.h"
 #include "esp_timer.h"
+
+#include "esp_http_client.h"
 
 #include "sdkconfig.h"
 
@@ -21,6 +25,7 @@
 static const char *INIT_TAG = "INIT";
 static const char *BTN_TAG = "BTN";
 static const char *LED_TAG = "LED";
+static const char *DIRECTOR_TAG = "DIRECTOR";
 static const char *WIFI_TAG = "WIFI";
 static const char *ADC_TAG = "ADC";
 
@@ -30,8 +35,11 @@ static const char *ERROR_TAG = "ERROR";
 static const char version_string[] = "Firmware version: v1.0.2";
 
 static TaskHandle_t button_task_h = NULL;
+static TaskHandle_t director_task_h = NULL;
 static TaskHandle_t led_task_h = NULL;
 static TaskHandle_t measure_task_h = NULL;
+
+static QueueHandle_t xDirectorEvtQueue = NULL;
 
 
 /* Use project configuration menu (idf.py menuconfig) to choose the GPIO to blink,
@@ -40,50 +48,6 @@ static TaskHandle_t measure_task_h = NULL;
 #define BLINK_GPIO CONFIG_BLINK_GPIO
 
 static uint8_t s_led_state = 0;
-
-
-static led_strip_handle_t led_strip;
-
-static void blink_led(void)
-{
-    /* If the addressable LED is enabled */
-    if (s_led_state) {
-        /* Set the LED pixel using RGB from 0 (0%) to 255   (100%) for each color */
-        led_strip_set_pixel(led_strip, 0, 16, 16, 16);
-        /* Refresh the strip to send data */
-        led_strip_refresh(led_strip);
-    } else {
-        /* Set all LED off to clear all pixels */
-        led_strip_clear(led_strip);
-    }
-}
-
-static void configure_led(void)
-{
-    ESP_LOGI(LED_TAG, "Example configured to blink addressable LED!");
-    /* LED strip initialization with the GPIO and pixels number*/
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = BLINK_GPIO,
-        .max_leds = 1, // at least one LED on board
-    };
-#if CONFIG_BLINK_LED_STRIP_BACKEND_RMT
-    led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz
-        .flags.with_dma = false,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-#elif CONFIG_BLINK_LED_STRIP_BACKEND_SPI
-    led_strip_spi_config_t spi_config = {
-        .spi_bus = SPI2_HOST,
-        .flags.with_dma = true,
-    };
-    ESP_ERROR_CHECK(led_strip_new_spi_device(&strip_config, &spi_config, &led_strip));
-#else
-#error "unsupported LED strip backend"
-#endif
-    /* Set all LED off to clear all pixels */
-    led_strip_clear(led_strip);
-}
 
 typedef struct
 {
@@ -180,6 +144,79 @@ void button_task(void *pvParameters)
     }
 }
 
+static QueueHandle_t led_queue_h = NULL;
+
+typedef struct
+{
+    uint32_t    red;
+    uint32_t    green;
+    uint32_t    blue;
+
+    uint32_t    led_num;
+
+    uint32_t    blink_period_ms;
+    int64_t     last_blink_time;
+
+    bool        is_led_on;
+}led_str_t;
+
+static void configure_led(led_strip_handle_t *led_strip_p)
+{
+    ESP_LOGI(LED_TAG, "Example configured to blink addressable LED!");
+    /* LED strip initialization with the GPIO and pixels number*/
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = BLINK_GPIO,
+        .max_leds = 1, // at least one LED on board
+    };
+#if CONFIG_BLINK_LED_STRIP_BACKEND_RMT
+    led_strip_rmt_config_t rmt_config = {
+        .resolution_hz = 10 * 1000 * 1000, // 10MHz
+        .flags.with_dma = false,
+    };
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, led_strip_p));
+#elif CONFIG_BLINK_LED_STRIP_BACKEND_SPI
+    led_strip_spi_config_t spi_config = {
+        .spi_bus = SPI2_HOST,
+        .flags.with_dma = true,
+    };
+    ESP_ERROR_CHECK(led_strip_new_spi_device(&strip_config, &spi_config, led_strip_p));
+#else
+#error "unsupported LED strip backend"
+#endif
+    /* Set all LED off to clear all pixels */
+    led_strip_clear(*led_strip_p);
+}
+
+static void led_struct_fill(led_str_t *leds_p, uint32_t red, uint32_t green, uint32_t blue, uint32_t blink_period_ms)
+{
+    leds_p->red = red;
+    leds_p->green = green;
+    leds_p->blue = blue;
+    leds_p->blink_period_ms = blink_period_ms;
+}
+
+static void led_write_refresh(led_strip_handle_t *strip_p, led_str_t *leds_p)
+{
+    int64_t now = esp_timer_get_time();
+    int64_t blink_time_elapsed = now - leds_p->last_blink_time;
+    if (blink_time_elapsed > leds_p->blink_period_ms * 1000)
+    {
+        if (false == leds_p->is_led_on)
+        {
+            led_strip_set_pixel(*strip_p, leds_p->led_num, leds_p->red, leds_p->green, leds_p->blue);
+            led_strip_refresh(*strip_p);
+            leds_p->is_led_on = true;
+        }
+        else if (true == leds_p->is_led_on && leds_p->blink_period_ms > 0)
+        {
+            //do not clear strip if there is no blinks
+            led_strip_clear(*strip_p);
+            leds_p->is_led_on = false;
+        }
+        leds_p->last_blink_time = now;
+    }
+}
+
 typedef enum
 {
     STATE_STARTUP = 0, 
@@ -191,89 +228,162 @@ typedef enum
     STATE_OTA_CHECKING,
     STATE_OTA_UPDATING,
     STATE_ERROR
-}LED_STATE_t;
-
-typedef enum
-{
-    STATE_CMD_STARTUP_TO_INIT = (uint32_t)(1 << 0),
-    STATE_CMD_INIT_TO_IDLE = (uint32_t)(1 << 1),
-    STATE_CMD_MEASURE = (uint32_t)(1 << 2),
-    STATE_CMD_MEASURE_TO_WIFI_CONNECTING = (uint32_t)(1 << 3),
-    STATE_CMD_WIFI_CONNECT_TO_UPLOADING = (uint32_t)(1 << 4),
-    STATE_CMD_OTA_START = (uint32_t)(1 << 5),
-    STATE_CMD_ERROR_RESET = (uint32_t)(1 << 31),
-}state_task_notify_cmd_t;
-
-typedef enum
-{
-    MEASURE_CMD_START = (1 << 10),
-    MEASURE_CMD_STOP = (1 << 11),
-    MEASURE_CMD_WIFI_CONNECT_CALLBACK = (1 << 12),
-    MEASURE_CMD_WIFI_UPLOAD_CALLBACK = (1 << 13),
-}measure_task_cmd_t;
+}system_state_t;
 
 void led_task(void *pvParameters)
 {
     ESP_LOGI(LED_TAG, "LED task started\r\n");
 
-    configure_led();
+    led_strip_handle_t led_strip;
 
-    LED_STATE_t current_state = STATE_STARTUP;
-    uint32_t notify_val = 0;
+    led_str_t local_led = {0, };
+    int64_t last_blink = 0;
+    bool is_led_on = false;
+
+    configure_led(&led_strip);
+
+    uint32_t led_state = 0;
     while (1)
     {
-        BaseType_t notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &notify_val, portMAX_DELAY);
-        if (notify_ret == pdPASS)
+        BaseType_t led_notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &led_state, pdMS_TO_TICKS(10));
+        if (led_notify_ret == pdPASS)
         {
-            if (notify_val & STATE_CMD_STARTUP_TO_INIT && current_state == STATE_STARTUP)
+            switch(led_state)
             {
-                ESP_LOGI(LED_TAG, "startup to init cmd\r\n");
-                current_state = STATE_INIT;
-            }
-            else if (notify_val & STATE_CMD_INIT_TO_IDLE && current_state == STATE_INIT)
-            {
-                ESP_LOGI(LED_TAG, "init to idle cmd\r\n");
-                current_state = STATE_IDLE;
-            }
-            else if (notify_val & STATE_CMD_MEASURE)
-            {
-                ESP_LOGI(LED_TAG, "measure cmd\r\n");
-                if (NULL == measure_task_h)
+                case(1 << STATE_STARTUP):
                 {
-                    ESP_LOGE(LED_TAG, "measure task not initialized");
+                    led_struct_fill(&local_led, 0, 0, 0, 0);
                 }
-                else
+                break;
+                case(1 << STATE_INIT):
                 {
-                    if (current_state == STATE_IDLE)
-                    {
-                        xTaskNotify(measure_task_h, MEASURE_CMD_START, eSetBits);
-                    }
-                    else if (current_state == STATE_MEASURING)
-                    {
-                        xTaskNotify(measure_task_h, MEASURE_CMD_STOP, eSetBits);
-                    }
+                    led_struct_fill(&local_led, 0, 20, 0, 200);
                 }
+                break;
+                case(1 << STATE_IDLE):
+                {
+                    led_struct_fill(&local_led, 0, 20, 0, 0);
+                }
+                break;
+                case(1 << STATE_MEASURING):
+                {
+                    led_struct_fill(&local_led, 0, 0, 20, 200);
+                }
+                break;
+                case(1 << STATE_WIFI_CONNECTING):
+                {
+                    led_struct_fill(&local_led, 0, 0, 20, 0);
+                }
+                break;
+                case(1 << STATE_UPLOADING):
+                {
+                    led_struct_fill(&local_led, 20, 20, 0, 200);
+                }
+                break;
+                case(1 << STATE_OTA_CHECKING):
+                case(1 << STATE_OTA_UPDATING):
+                {
+                    led_struct_fill(&local_led, 20, 20, 0, 0);
+                }
+                break;
+                case(1 << STATE_ERROR):
+                {
+                    led_struct_fill(&local_led, 20, 0, 0, 200);
+                }
+                break;
+                default:
+                {
+                    ESP_LOGE(LED_TAG, "Unknown LED state\r\n");
+                }
+                break;
             }
-            else if (notify_val & STATE_CMD_MEASURE_TO_WIFI_CONNECTING)
-            {
-                //notification from measure task that it started wifi connection
-                current_state = STATE_WIFI_CONNECTING;
-                //WARNING might need to set LEDS here and give notification back to wifi process for having correct indication at the right time
-                xTaskNotify(measure_task_h, MEASURE_CMD_WIFI_CONNECT_CALLBACK, eSetBits);
-            }
-            else if (notify_val & STATE_CMD_WIFI_CONNECT_TO_UPLOADING)
-            {
-                //notification from measure task that it started data upload
-                current_state = STATE_UPLOADING;
-                xTaskNotify(measure_task_h, MEASURE_CMD_WIFI_UPLOAD_CALLBACK, eSetBits);
-            }
-            else if (notify_val & STATE_CMD_OTA_START)
-            {
+        }
+        led_write_refresh(&led_strip, &local_led);
+    }
+}
 
-            }
-            else if (notify_val & STATE_CMD_ERROR_RESET)
-            {
 
+
+typedef enum 
+{
+    EVT_BUTTON_SHORT_CLICK,
+    EVT_BUTTON_LONG_CLICK,
+    EVT_BACKEND_BUFFER_FULL,
+    EVT_WIFI_CONNECTED,
+    EVT_WIFI_ERROR,
+    EVT_UPLOAD_DONE,
+    EVT_UPLOAD_ERROR
+}event_id_t;
+
+typedef struct 
+{
+    event_id_t id;
+    uint32_t param; // errcode/data_size
+}system_event_t;
+
+void director_task(void *pvParameters)
+{
+    ESP_LOGI(DIRECTOR_TAG, "Director task started\r\n");
+    
+    system_state_t current_state = STATE_STARTUP;
+    system_event_t evt_queue_recv = {0, };
+    
+    uint32_t notify_val = 0;
+
+    while (1)
+    {
+        BaseType_t queue_ret = xQueueReceive(xDirectorEvtQueue, &evt_queue_recv, portMAX_DELAY);
+        if (queue_ret == pdPASS)
+        {
+            switch (current_state)
+            {
+                case (STATE_STARTUP):
+                {
+
+                }
+                break;
+                case (STATE_INIT):
+                {
+
+                }
+                break;
+                case (STATE_IDLE):
+                {
+
+                }
+                break;
+                case (STATE_MEASURING):
+                {
+
+                }
+                break;
+                case (STATE_WIFI_CONNECTING):
+                {
+
+                }
+                break;
+                case (STATE_UPLOADING):
+                {
+
+                }
+                break;
+                case (STATE_OTA_CHECKING):
+                {
+
+                }
+                break;
+                case (STATE_OTA_UPDATING):
+                {
+
+                }
+                break;
+                case (STATE_ERROR):
+                {
+
+                }
+                break;
+                default:
+                    break;
             }
         }
 
@@ -282,43 +392,49 @@ void led_task(void *pvParameters)
             case (STATE_INIT):
             {
                 ESP_LOGI(LED_TAG, "State init, green blinking led\r\n");
-                gpio_set_level(BLINK_GPIO, 0);
+                xTaskNotify(led_task_h, 1 << STATE_INIT, eSetBits);
             }
             break;
             case (STATE_IDLE):
             {
                 ESP_LOGI(LED_TAG, "State IDLE, green led\r\n");
-                gpio_set_level(BLINK_GPIO, 1);
+                xTaskNotify(led_task_h, 1 << STATE_IDLE, eSetBits);
             }
             break;
             case (STATE_MEASURING):
             {
                 ESP_LOGI(LED_TAG, "State Measuring, blue blinking led\r\n");
+                xTaskNotify(led_task_h, 1 << STATE_MEASURING, eSetBits);
             }
             break;
             case (STATE_WIFI_CONNECTING):
             {
                 ESP_LOGI(LED_TAG, "State WIFI Connecting, blue led\r\n");
+                xTaskNotify(led_task_h, 1 << STATE_WIFI_CONNECTING, eSetBits);
             }
             break;
             case (STATE_UPLOADING):
             {
                 ESP_LOGI(LED_TAG, "State Uploading data, yellow blinking led\r\n");
+                xTaskNotify(led_task_h, 1 << STATE_UPLOADING, eSetBits);
             }
             break;
             case (STATE_OTA_CHECKING):
+            {
+                ESP_LOGI(LED_TAG, "State OTA check, yellow led\r\n");
+                xTaskNotify(led_task_h, 1 << STATE_OTA_CHECKING, eSetBits);
+            }
+            break;
             case (STATE_OTA_UPDATING):
             {
-                ESP_LOGI(LED_TAG, "State OTA check/update, yellow led\r\n");
+                ESP_LOGI(LED_TAG, "State OTA update, yellow led\r\n");
+                xTaskNotify(led_task_h, 1 << STATE_OTA_UPDATING, eSetBits);
             }
             break;
             case (STATE_ERROR):
             {
                 ESP_LOGE(ERROR_TAG, "ERROR State, RED led\r\n");
-                if (notify_val & STATE_CMD_ERROR_RESET)
-                {
-                    current_state = STATE_IDLE;
-                }
+                xTaskNotify(led_task_h, 1 << STATE_ERROR, eSetBits);
             }
             break;
             default:
@@ -342,12 +458,28 @@ void app_main(void)
     ESP_LOGI(INIT_TAG, "%s\r\n", version_string);
     /* Configure the peripheral according to the LED type */
 
+    BaseType_t director_ret = xTaskCreatePinnedToCore(  director_task, 
+                                                        "director task", 
+                                                        4096, 
+                                                        NULL, 
+                                                        10, 
+                                                        &director_task_h, 
+                                                        1);
+    if (director_ret == pdPASS)
+    {
+        ESP_LOGI(INIT_TAG, "director task created\r\n");
+    }
+    else
+    {
+        ESP_LOGE(INIT_TAG, "director task creation failed\r\n");
+        while (1);
+    }
     //LED Task is the main orchestrator task, so high priority
     BaseType_t led_ret = xTaskCreatePinnedToCore(led_task, 
                                                 "led task", 
                                                 4096, 
                                                 NULL, 
-                                                10, 
+                                                1, 
                                                 &led_task_h, 
                                                 1);
     if (led_ret == pdPASS)
@@ -360,7 +492,7 @@ void app_main(void)
         while (1);
     }
 
-    xTaskNotify(led_task_h, STATE_INIT, eSetBits);
+    xTaskNotify(director_task_h, 1 << STATE_INIT, eSetBits);
 
     BaseType_t btn_ret = xTaskCreatePinnedToCore(button_task, 
                                                 "Btn task", 
@@ -399,7 +531,7 @@ void app_main(void)
     }
 
     //INIT DONE, MOVE ON TO IDLE STATE
-    xTaskNotify(led_task_h, STATE_IDLE, eSetBits);
+    xTaskNotify(director_task_h, 1 << STATE_IDLE, eSetBits);
 
 
     return;
