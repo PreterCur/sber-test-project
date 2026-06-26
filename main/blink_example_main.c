@@ -19,6 +19,10 @@
 
 #include "esp_http_client.h"
 
+#include "esp_adc/adc_continuous.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+
 #include "sdkconfig.h"
 
 
@@ -70,7 +74,160 @@ typedef struct
 #define LATCH_SWITCH_PIN        GPIO_NUM_13
 #define DEBOUNCE_SAMPLES        10
 #define POLLING_PERIOD          5
+
 //Tasks
+
+typedef enum 
+{
+    EVT_BUTTON_SHORT_CLICK,
+    EVT_BUTTON_LONG_CLICK,
+    EVT_ADC_BTN_INTERRUPT,
+    EVT_ADC_FULL_INTERRUPT,
+    EVT_WIFI_CONNECTED,
+    EVT_WIFI_ERROR,
+    EVT_UPLOAD_DONE,
+    EVT_UPLOAD_ERROR
+}event_id_t;
+
+typedef enum
+{
+    MEASURE_START = 0,
+    MEASURE_BTN_INTERRUPT,
+    MEASURE_BUF_FULL,
+    MEASURE_START_UPLOAD
+}measure_cmd_t;
+
+
+
+//struct for single channel ADC use
+typedef struct
+{
+    uint32_t frame_size;
+    uint32_t sample_freq;
+    adc_digi_output_format_t output_type;//type 2 for esp32s3
+    uint8_t adc_atten;
+    uint8_t adc_ch;
+    uint8_t adc_unit;
+
+    uint16_t *adc_data;
+
+    adc_continuous_callback_t callback_func;
+}user_adc_t;
+
+
+static void init_adc_continuous(adc_continuous_handle_t *out_handle, user_adc_t *user_adc_p)
+{
+    // 1. Allocate the continuous mode master handle
+    adc_continuous_handle_cfg_t adc_config = {
+        .max_store_buf_size = 4096, // Internal pool for DMA descriptors
+        .conv_frame_size = user_adc_p->frame_size,
+    };
+    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, out_handle));
+
+    // 2. Configure the hardware pattern table and digital controller
+    adc_continuous_config_t dig_cfg = {
+        .sample_freq_hz = user_adc_p->sample_freq,
+        .conv_mode = ADC_CONV_SINGLE_UNIT_1, // Track Unit 1 only
+        .format = user_adc_p->output_type,
+    };
+
+    // Define channel patterns to read
+    adc_digi_pattern_config_t pattern_list[1] = {
+        {
+            .atten = user_adc_p->adc_atten,
+            .channel = user_adc_p->adc_ch,
+            .unit = user_adc_p->adc_unit,
+            .bit_width = ADC_BITWIDTH_12,
+        }
+    };
+
+    dig_cfg.pattern_num = 1;
+    dig_cfg.adc_pattern = pattern_list;
+    ESP_ERROR_CHECK(adc_continuous_config(*out_handle, &dig_cfg));
+
+    // 3. Register asynchronous conversion event callbacks
+    adc_continuous_evt_cbs_t cbs = {
+        .on_conv_done = user_adc_p->callback_func,
+    };
+    ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(*out_handle, &cbs, NULL));
+}
+
+
+void measure_task(void *pvParameters)
+{
+    ESP_LOGI(ADC_TAG, "Measure task started\r\n");
+
+    adc_continuous_handle_t adc_h = NULL;
+
+
+    user_adc_t user_adc_str = 
+    {
+        .adc_unit = ADC_UNIT_1,
+        .adc_ch = ADC_CHANNEL_0,
+        .adc_atten = ADC_ATTEN_DB_12,
+        .output_type = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
+        .sample_freq = 1000,
+        .frame_size = 10000,
+
+    };
+
+    adc_continuous_handle_cfg_t adc_config = 
+    {
+        .conv_frame_size = user_adc_str.frame_size,
+        .max_store_buf_size = (user_adc_str.frame_size / 1024 + 1) * 1024, //give some headroom
+    };
+
+    init_adc_continuous(&adc_h, &user_adc_str);
+
+    uint32_t measure_notify_val = 0;
+
+    while (1)
+    {
+        UBaseType_t adc_wait_ret = xTaskNotifyWait(0x00, ULONG_MAX, &measure_notify_val, portMAX_DELAY);
+        if (adc_wait_ret == pdPASS)
+        {
+            switch(measure_notify_val)
+            {
+                case(MEASURE_START):
+                {
+
+                }
+                break;
+                case(MEASURE_BTN_INTERRUPT):
+                {
+                    //notify from Director task
+                    const uint32_t btn_evt = EVT_ADC_BTN_INTERRUPT;
+                    adc_continuous_stop(adc_h);
+                    BaseType_t full_queue_ret = xQueueSend(xDirectorEvtQueue, &btn_evt, 0);
+                    if (full_queue_ret != pdTRUE)
+                    {
+                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                        break;
+                    }
+                }
+                break;
+                case(MEASURE_BUF_FULL):
+                {
+                    //notify from ADC ISR
+                    const uint32_t full_evt = EVT_ADC_FULL_INTERRUPT;
+                    adc_continuous_stop(adc_h);
+                    BaseType_t full_queue_ret = xQueueSend(xDirectorEvtQueue, &full_evt, 0);
+                    if (full_queue_ret != pdTRUE)
+                    {
+                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                        break;
+                    }
+                }
+                break;
+                case(MEASURE_START_UPLOAD):
+                {
+
+                }
+                break;
+            }
+        }
+    }
+}
 
 void button_task(void *pvParameters)
 {
@@ -304,16 +461,7 @@ void led_task(void *pvParameters)
 
 
 
-typedef enum 
-{
-    EVT_BUTTON_SHORT_CLICK,
-    EVT_BUTTON_LONG_CLICK,
-    EVT_BACKEND_BUFFER_FULL,
-    EVT_WIFI_CONNECTED,
-    EVT_WIFI_ERROR,
-    EVT_UPLOAD_DONE,
-    EVT_UPLOAD_ERROR
-}event_id_t;
+
 
 typedef struct 
 {
@@ -440,16 +588,6 @@ void director_task(void *pvParameters)
             default:
                 break;
         }
-    }
-}
-
-void measure_task(void *pvParameters)
-{
-    ESP_LOGI(LED_TAG, "Measure task started\r\n");
-
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
