@@ -152,6 +152,17 @@ static void init_adc_continuous(adc_continuous_handle_t *out_handle, user_adc_t 
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(*out_handle, &cbs, NULL));
 }
 
+static bool IRAM_ATTR adc_coexist_cb(adc_continuous_handle_t handle, 
+                                     const adc_continuous_evt_data_t *edata, 
+                                     void *user_data)
+{
+    BaseType_t high_task_wakeup = pdFALSE;
+    TaskHandle_t *task_h_isr = (TaskHandle_t *)user_data;
+    // Notify the processing task that new data is available in the DMA buffer
+    vTaskNotifyGiveFromISR(*task_h_isr, &high_task_wakeup);
+    return high_task_wakeup;
+}
+
 
 void measure_task(void *pvParameters)
 {
@@ -168,6 +179,7 @@ void measure_task(void *pvParameters)
         .output_type = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
         .sample_freq = 1000,
         .frame_size = 10000,
+        .callback_func = adc_coexist_cb,
 
     };
 
