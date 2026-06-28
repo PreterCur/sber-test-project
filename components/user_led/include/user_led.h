@@ -1,6 +1,9 @@
 #ifndef USER_LED_H
 #define USER_LED_H
 
+#include <stdint.h>
+#include <math.h>
+
 #include "esp_log.h"
 
 #include "led_strip.h"

@@ -18,8 +18,7 @@
 
 typedef enum
 {
-    STATE_STARTUP = 0, 
-    STATE_INIT,
+    STATE_INIT = 0,
     STATE_IDLE,
     STATE_MEASURING,
     STATE_WIFI_CONNECTING,
@@ -29,6 +28,14 @@ typedef enum
     STATE_ERROR
 }system_state_t;
 
+typedef struct 
+{
+    QueueHandle_t evt_queue;
+    TaskHandle_t led_task;
+    TaskHandle_t btn_task;
+    TaskHandle_t measure_task;
+
+}director_task_config_t;
 
 
 

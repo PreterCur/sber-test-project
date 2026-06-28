@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-typedef enum {
+typedef enum 
+{
     COMP_ID_BUTTON,
     COMP_ID_MEASURE,
     COMP_ID_LED
@@ -11,9 +12,9 @@ typedef enum {
 
 typedef struct 
 {
-    component_id_t  comp_id; // Who sent this?
-    int             event_id;           // What happened? (Component enum cast to int)
-    uint32_t        param;         // Optional payload
+    component_id_t  comp_id;    // Who sent this?
+    int             event_id;   // What happened? (Component enum cast to int)
+    uint32_t        param;      // Optional payload
 } generic_event_t;
 
 

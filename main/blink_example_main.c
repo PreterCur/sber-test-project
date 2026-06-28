@@ -28,43 +28,83 @@ static QueueHandle_t xDirectorEvtQueue = NULL;
 static QueueHandle_t led_queue_h = NULL;
 
 
-
-
-
-
-
 #define LATCH_SWITCH_PIN        GPIO_NUM_13
 #define DEBOUNCE_SAMPLES        10
 #define POLLING_PERIOD          5
 
 //Tasks
 
-
-
-
-typedef struct 
+esp_err_t state_update_led(TaskHandle_t led_task, system_state_t new_state)
 {
-    
-}director_task_config_t;
-
+    int state_color = -1;
+    switch (new_state)
+    {
+        case(STATE_INIT):
+        {
+            state_color = LED_CMD_BLINK_GREEN;
+        }
+        break;
+        case(STATE_IDLE):
+        {
+            state_color = LED_CMD_SOLID_GREEN;
+        }
+        break;
+        case(STATE_MEASURING):
+        {
+            state_color = LED_CMD_BLINK_BLUE;
+        }
+        break;
+        case(STATE_WIFI_CONNECTING):
+        {
+            state_color = LED_CMD_SOLID_BLUE;
+        }
+        break;
+        case(STATE_UPLOADING):
+        {
+            state_color = LED_CMD_BLINK_YELLOW;
+        }
+        break;
+        case(STATE_OTA_CHECKING):
+        case(STATE_OTA_UPDATING):
+        {
+            state_color = LED_CMD_SOLID_YELLOW;
+        }
+        break;
+        case(STATE_ERROR):
+        {
+            state_color = LED_CMD_BLINK_RED;
+        }
+        break;
+        default:
+        {
+            ESP_LOGE(DIRECTOR_TAG, "Unknown system state for LEDS");
+            return ESP_FAIL;
+        }
+        break;
+    }
+    xTaskNotify(led_task, 1 << state_color, eSetBits);
+    return ESP_OK;
+}
 
 void director_task(void *pvParameters)
 {
     ESP_LOGI(DIRECTOR_TAG, "Director task started\r\n");
     
-    system_state_t current_state = STATE_STARTUP;
+    director_task_config_t *task_cfg_p = (director_task_config_t *)pvParameters;
+
+    system_state_t current_state = STATE_INIT;
     generic_event_t evt_queue_recv = {0, };
     
     uint32_t notify_val = 0;
 
     while (1)
     {
-        BaseType_t queue_ret = xQueueReceive(xDirectorEvtQueue, &evt_queue_recv, portMAX_DELAY);
+        BaseType_t queue_ret = xQueueReceive(task_cfg_p->evt_queue, &evt_queue_recv, portMAX_DELAY);
         if (queue_ret == pdPASS)
         {
             switch (current_state)
             {
-                case (STATE_STARTUP):
+                case (STATE_INIT):
                 {
                     if (evt_queue_recv.comp_id == COMP_ID_BUTTON)
                     {
@@ -80,29 +120,143 @@ void director_task(void *pvParameters)
                     }
                 }
                 break;
-                case (STATE_INIT):
-                {
-
-                }
-                break;
                 case (STATE_IDLE):
                 {
+                    if (evt_queue_recv.comp_id == COMP_ID_BUTTON)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_BUTTON_SHORT_CLICK):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "Send START cmd to measure task\r\n");
+                                xTaskNotify(task_cfg_p->measure_task, MEASURE_START, eSetBits);
 
+                                current_state = STATE_MEASURING;
+                                state_update_led(task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            case(EVT_BUTTON_LONG_CLICK):
+                            {
+
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported BUTTON cmd!\r\n");
+                            }
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        //probably empty
+                        ESP_LOGE(DIRECTOR_TAG, "Unsupported event for IDLE state\r\n");
+                    }
                 }
                 break;
                 case (STATE_MEASURING):
                 {
+                    if (evt_queue_recv.comp_id == COMP_ID_BUTTON)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_BUTTON_SHORT_CLICK):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "Send BTN interrupt cmd to measure task\r\n");
+                                xTaskNotify(task_cfg_p->measure_task, MEASURE_BTN_INTERRUPT, eSetBits);
+                            }
+                            break;
+                            case(EVT_BUTTON_LONG_CLICK):
+                            {
 
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported BUTTON cmd!\r\n");
+                            }
+                            break;
+                        }
+                    }
+                    else if (evt_queue_recv.comp_id == COMP_ID_MEASURE)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_ADC_BTN_INTERRUPT):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "ADC stop event from BTN IRQ, ready to send data\r\n");
+
+                                //for debug
+                                current_state = STATE_MEASURING;
+                                state_update_led(task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            case(EVT_ADC_FULL_INTERRUPT):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "ADC stop event, buf full IRQ, ready to send data\r\n");
+
+                                //for debug
+                                current_state = STATE_MEASURING;
+                                state_update_led(task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported STATE_MEASURING event!\r\n");
+                            }
+                            break;
+                        }
+                    }
                 }
                 break;
                 case (STATE_WIFI_CONNECTING):
                 {
+                    if (evt_queue_recv.comp_id == COMP_ID_MEASURE)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_WIFI_CONNECTED):
+                            {
 
+                            }
+                            break;
+                            case(EVT_WIFI_ERROR):
+                            {
+
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported STATE_WIFI_CONNECTING event!\r\n");
+                            }
+                            break;
+                        }
+                    }
                 }
                 break;
                 case (STATE_UPLOADING):
                 {
+                    if (evt_queue_recv.comp_id == COMP_ID_MEASURE)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_UPLOAD_DONE):
+                            {
 
+                            }
+                            break;
+                            case(EVT_UPLOAD_ERROR):
+                            {
+
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported STATE_UPLOADING event!\r\n");
+                            }
+                            break;
+                        }
+                    }
                 }
                 break;
                 case (STATE_OTA_CHECKING):

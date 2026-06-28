@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include "measure.h"
 
 
@@ -104,27 +103,31 @@ void measure_task_handler(void *pvParameters)
 
     init_adc_continuous(&adc_h, &user_adc_str);
 
-    uint32_t measure_notify_val = 0;
+    uint32_t measure_notify_val_bits = 0;
 
     while (1)
     {
-        UBaseType_t adc_wait_ret = xTaskNotifyWait(0x00, ULONG_MAX, &measure_notify_val, portMAX_DELAY);
+        UBaseType_t adc_wait_ret = xTaskNotifyWait(0x00, ULONG_MAX, &measure_notify_val_bits, portMAX_DELAY);
         if (adc_wait_ret == pdPASS)
         {
-            switch(measure_notify_val)
+            uint32_t measure_cmd = log2(measure_notify_val_bits);
+            switch(measure_cmd)
             {
                 case(MEASURE_START):
                 {
-
+                    ESP_LOGI(ADC_TAG, "Started ADC Measure\r\n");
+                    ESP_ERROR_CHECK(adc_continuous_flush_pool(adc_h));
+                    ESP_ERROR_CHECK(adc_continuous_start(adc_h));
                 }
                 break;
                 case(MEASURE_BTN_INTERRUPT):
                 {
                     //notify from Director task
+                    ESP_LOGI(ADC_TAG, "ADC stop BTN interrupt\r\n");
                     const uint32_t btn_evt = EVT_ADC_BTN_INTERRUPT;
-                    adc_continuous_stop(adc_h);
-                    BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &btn_evt, 0);
-                    if (full_queue_ret != pdTRUE)
+                    ESP_ERROR_CHECK(adc_continuous_stop(adc_h));
+                    BaseType_t adc_btn_irq_ret = xQueueSend(measure_evt_queue_h, &btn_evt, 0);
+                    if (adc_btn_irq_ret != pdTRUE)
                     {
                         ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
                         break;
@@ -134,6 +137,7 @@ void measure_task_handler(void *pvParameters)
                 case(MEASURE_BUF_FULL):
                 {
                     //notify from ADC ISR
+                    ESP_LOGI(ADC_TAG, "ADC stop, BUF FULL\r\n");
                     const uint32_t full_evt = EVT_ADC_FULL_INTERRUPT;
                     adc_continuous_stop(adc_h);
                     BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &full_evt, 0);

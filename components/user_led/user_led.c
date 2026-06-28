@@ -69,6 +69,8 @@ static void led_write_refresh(led_strip_handle_t *strip_p, led_str_t *leds_p)
 
 
 
+#define LED_BLINK_PERIOD (uint32_t)500
+
 void led_task_handler(void *pvParameters)
 {
     ESP_LOGI(LED_TAG, "LED task started\r\n");
@@ -76,57 +78,57 @@ void led_task_handler(void *pvParameters)
     led_strip_handle_t led_strip;
 
     led_str_t local_led = {0, };
-    int64_t last_blink = 0;
-    bool is_led_on = false;
 
     configure_led(&led_strip);
 
-    uint32_t led_state = 0;
+    uint32_t led_state_bits = 0;
+
     while (1)
     {
-        BaseType_t led_notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &led_state, pdMS_TO_TICKS(10));
+        BaseType_t led_notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &led_state_bits, pdMS_TO_TICKS(10));
         if (led_notify_ret == pdPASS)
         {
+            uint32_t led_state = log2(led_state_bits);
             switch(led_state)
             {
-                case(1 << LED_CMD_OFF):
+                case(LED_CMD_OFF):
                 {
                     led_struct_fill(&local_led, 0, 0, 0, 0);
                 }
                 break;
-                case(1 << LED_CMD_BLINK_GREEN):
+                case(LED_CMD_BLINK_GREEN):
                 {
-                    led_struct_fill(&local_led, 0, 20, 0, 200);
+                    led_struct_fill(&local_led, 0, 20, 0, LED_BLINK_PERIOD);
                 }
                 break;
-                case(1 << LED_CMD_SOLID_GREEN):
+                case(LED_CMD_SOLID_GREEN):
                 {
                     led_struct_fill(&local_led, 0, 20, 0, 0);
                 }
                 break;
-                case(1 << LED_CMD_BLINK_BLUE):
+                case(LED_CMD_BLINK_BLUE):
                 {
-                    led_struct_fill(&local_led, 0, 0, 20, 200);
+                    led_struct_fill(&local_led, 0, 0, 20, LED_BLINK_PERIOD);
                 }
                 break;
-                case(1 << LED_CMD_SOLID_BLUE):
+                case(LED_CMD_SOLID_BLUE):
                 {
                     led_struct_fill(&local_led, 0, 0, 20, 0);
                 }
                 break;
-                case(1 << LED_CMD_SOLID_YELLOW):
+                case(LED_CMD_BLINK_YELLOW):
+                {
+                    led_struct_fill(&local_led, 20, 20, 0, LED_BLINK_PERIOD);
+                }
+                break;
+                case(LED_CMD_SOLID_YELLOW):
                 {
                     led_struct_fill(&local_led, 20, 20, 0, 0);
                 }
                 break;
-                case(1 << LED_CMD_BLINK_YELLOW):
+                case(LED_CMD_BLINK_RED):
                 {
-                    led_struct_fill(&local_led, 20, 20, 0, 200);
-                }
-                break;
-                case(1 << LED_CMD_BLINK_RED):
-                {
-                    led_struct_fill(&local_led, 20, 0, 0, 200);
+                    led_struct_fill(&local_led, 20, 0, 0, LED_BLINK_PERIOD);
                 }
                 break;
                 default:

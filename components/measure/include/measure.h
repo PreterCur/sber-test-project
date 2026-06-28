@@ -2,6 +2,7 @@
 #define MEASURE_H
 
 #include <stdint.h>
+#include <math.h>
 
 #include "esp_log.h"
 
@@ -29,10 +30,12 @@ typedef enum
 
 typedef enum
 {
+    //notification cmds from director
     MEASURE_START = 0,
+    MEASURE_START_UPLOAD,
     MEASURE_BTN_INTERRUPT,
-    MEASURE_BUF_FULL,
-    MEASURE_START_UPLOAD
+    //notification from adc isr
+    MEASURE_BUF_FULL = 20,
 }measure_cmd_t;
 
 //struct for single channel ADC use
