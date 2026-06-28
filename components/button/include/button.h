@@ -35,6 +35,13 @@ typedef struct
 
 }button_exti_str;
 
+typedef struct
+{
+    QueueHandle_t *evt_queue_p;
+    button_exti_str btn_config_str;
+}button_task_config_t;
+
+
 void button_task_handler(void *pvParameters);
 
 

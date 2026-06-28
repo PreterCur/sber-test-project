@@ -10,6 +10,12 @@ static uint8_t s_led_state = 0;
 
 static const char *LED_TAG = "LED";
 
+
+static void configure_led(led_strip_handle_t *led_strip_p);
+static void led_struct_fill(led_str_t *leds_p, uint32_t red, uint32_t green, uint32_t blue, uint32_t blink_period_ms);
+static void led_write_refresh(led_strip_handle_t *strip_p, led_str_t *leds_p);
+
+
 static void configure_led(led_strip_handle_t *led_strip_p)
 {
     ESP_LOGI(LED_TAG, "Example configured to blink addressable LED!");
@@ -66,8 +72,6 @@ static void led_write_refresh(led_strip_handle_t *strip_p, led_str_t *leds_p)
         leds_p->last_blink_time = now;
     }
 }
-
-
 
 #define LED_BLINK_PERIOD (uint32_t)500
 

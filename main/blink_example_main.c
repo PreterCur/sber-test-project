@@ -82,9 +82,11 @@ esp_err_t state_update_led(TaskHandle_t led_task, system_state_t new_state)
         }
         break;
     }
-    xTaskNotify(led_task, 1 << state_color, eSetBits);
+    xTaskNotify(led_task, BIT(state_color), eSetBits);
     return ESP_OK;
 }
+
+
 
 void director_task(void *pvParameters)
 {
@@ -99,24 +101,34 @@ void director_task(void *pvParameters)
 
     while (1)
     {
-        BaseType_t queue_ret = xQueueReceive(task_cfg_p->evt_queue, &evt_queue_recv, portMAX_DELAY);
+        BaseType_t queue_ret = xQueueReceive(*task_cfg_p->evt_queue, &evt_queue_recv, portMAX_DELAY);
         if (queue_ret == pdPASS)
         {
             switch (current_state)
             {
                 case (STATE_INIT):
                 {
-                    if (evt_queue_recv.comp_id == COMP_ID_BUTTON)
+                    if (evt_queue_recv.comp_id == COMP_ID_MAIN)
                     {
-
+                        if (evt_queue_recv.event_id == INIT_STARTED)
+                        {
+                            ESP_LOGI(DIRECTOR_TAG, "Started init\r\n");
+                            state_update_led(*task_cfg_p->led_task, current_state);
+                        }
+                        else if (evt_queue_recv.event_id == INIT_ENDED)
+                        {
+                            ESP_LOGI(DIRECTOR_TAG, "Finished init, go to idle state\r\n");
+                            current_state = STATE_IDLE;
+                            state_update_led(*task_cfg_p->led_task, current_state);
+                        }
+                        else
+                        {
+                            ESP_LOGE(DIRECTOR_TAG, "Unknown MAIN Event ID, id = %d\r\n", evt_queue_recv.event_id);
+                        }
                     }
-                    else if (evt_queue_recv.comp_id == COMP_ID_MEASURE)
+                    else
                     {
-
-                    }
-                    else if (evt_queue_recv.comp_id == COMP_ID_LED)
-                    {
-                        //probably empty
+                        ESP_LOGE(DIRECTOR_TAG, "INIT state unsupported command\r\n");
                     }
                 }
                 break;
@@ -129,10 +141,10 @@ void director_task(void *pvParameters)
                             case(EVT_BUTTON_SHORT_CLICK):
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "Send START cmd to measure task\r\n");
-                                xTaskNotify(task_cfg_p->measure_task, MEASURE_START, eSetBits);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_START), eSetBits);
 
                                 current_state = STATE_MEASURING;
-                                state_update_led(task_cfg_p->led_task, current_state);
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             case(EVT_BUTTON_LONG_CLICK):
@@ -163,7 +175,7 @@ void director_task(void *pvParameters)
                             case(EVT_BUTTON_SHORT_CLICK):
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "Send BTN interrupt cmd to measure task\r\n");
-                                xTaskNotify(task_cfg_p->measure_task, MEASURE_BTN_INTERRUPT, eSetBits);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_BTN_INTERRUPT), eSetBits);
                             }
                             break;
                             case(EVT_BUTTON_LONG_CLICK):
@@ -187,8 +199,8 @@ void director_task(void *pvParameters)
                                 ESP_LOGI(DIRECTOR_TAG, "ADC stop event from BTN IRQ, ready to send data\r\n");
 
                                 //for debug
-                                current_state = STATE_MEASURING;
-                                state_update_led(task_cfg_p->led_task, current_state);
+                                current_state = STATE_WIFI_CONNECTING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             case(EVT_ADC_FULL_INTERRUPT):
@@ -196,8 +208,8 @@ void director_task(void *pvParameters)
                                 ESP_LOGI(DIRECTOR_TAG, "ADC stop event, buf full IRQ, ready to send data\r\n");
 
                                 //for debug
-                                current_state = STATE_MEASURING;
-                                state_update_led(task_cfg_p->led_task, current_state);
+                                current_state = STATE_WIFI_CONNECTING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             default:
@@ -281,27 +293,72 @@ void director_task(void *pvParameters)
     }
 }
 
+
+static adc_digi_output_data_t adc_dma_chunk_buf[ADC_DMA_SINGLE_FRAME_LEN * SOC_ADC_DIGI_DATA_BYTES_PER_CONV] = {0, };
+
+//using 4 bytes for a 12bit precision is excessive, ram is limited
+static uint16_t adc_data_buf[ADC_MAX_READINGS * SOC_ADC_DIGI_DATA_BYTES_PER_CONV] = {0, };
+
+uint32_t adc_single_frame_size      = ADC_DMA_SINGLE_FRAME_LEN * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
+uint32_t adc_max_multiframe_len     = ADC_MAX_READINGS * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
+
+measure_task_congif_t measure_cfg_str = 
+{
+    .adc_config = 
+    {
+        .adc_unit                   = ADC_UNIT_1,
+        .adc_ch                     = ADC_CHANNEL_0,
+        .adc_atten                  = ADC_ATTEN_DB_12,
+        .output_type                = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
+        .sample_freq                = 1000,
+        
+        .single_conv_frame_size     = ADC_DMA_SINGLE_FRAME_LEN * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
+        .frame_buffer_size          = ADC_MAX_READINGS * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
+
+        .adc_multiframe_buf         = adc_data_buf,
+        .adc_dma_frame              = adc_dma_chunk_buf,
+        
+        .callback_func              = NULL,
+        .adc_task                   = &measure_task_h,
+    },
+    .evt_queue_h = &xDirectorEvtQueue,
+};
+
+director_task_config_t director_cfg_str = 
+{
+    .btn_task       = &button_task_h,
+    .led_task       = &led_task_h,
+    .measure_task   = &measure_task_h,
+    .evt_queue      = &xDirectorEvtQueue
+    
+};
+
+button_task_config_t button_cfg_str = 
+{
+    .evt_queue_p = &xDirectorEvtQueue,
+    .btn_config_str = 
+    {
+        .btn_pin = GPIO_NUM_13,
+        .integrator = 0,
+        .long_press_period_ms = 3000,
+        .short_press_period_ms = 200,
+        .debounce_samples = 10,
+        .polling_period_ms = 10,
+    },
+};
+
 void app_main(void)
 {
     ESP_LOGI(INIT_TAG, "%s\r\n", version_string);
     /* Configure the peripheral according to the LED type */
 
-    BaseType_t director_ret = xTaskCreatePinnedToCore(  director_task, 
-                                                        "director task", 
-                                                        4096, 
-                                                        NULL, 
-                                                        10, 
-                                                        &director_task_h, 
-                                                        1);
-    if (director_ret == pdPASS)
+    xDirectorEvtQueue = xQueueCreate(10, sizeof(generic_event_t));
+    if (xDirectorEvtQueue == NULL)
     {
-        ESP_LOGI(INIT_TAG, "director task created\r\n");
+        ESP_LOGE(INIT_TAG, "queue creation failed!\r\n");
+        while(1);
     }
-    else
-    {
-        ESP_LOGE(INIT_TAG, "director task creation failed\r\n");
-        while (1);
-    }
+    
     //LED Task is the main orchestrator task, so high priority
     BaseType_t led_ret = xTaskCreatePinnedToCore(led_task_handler, 
                                                 "led task", 
@@ -320,12 +377,40 @@ void app_main(void)
         while (1);
     }
 
-    xTaskNotify(director_task_h, 1 << STATE_INIT, eSetBits);
+    BaseType_t director_ret = xTaskCreatePinnedToCore(  director_task, 
+                                                        "director task", 
+                                                        4096, 
+                                                        &director_cfg_str, 
+                                                        10, 
+                                                        &director_task_h, 
+                                                        1);
+    if (director_ret == pdPASS)
+    {
+        ESP_LOGI(INIT_TAG, "director task created\r\n");
+    }
+    else
+    {
+        ESP_LOGE(INIT_TAG, "director task creation failed\r\n");
+        while (1);
+    }
+
+    generic_event_t start_init_evt = 
+    {
+        .comp_id = COMP_ID_MAIN,
+        .event_id = INIT_STARTED,
+        .param = 0
+    };
+
+    BaseType_t init_q_start_ret = xQueueSend(xDirectorEvtQueue, &start_init_evt, 10);
+    if (init_q_start_ret != pdTRUE)
+    {
+        ESP_LOGE(INIT_TAG, "Failed to send INIT START EVT\r\n");
+    }
 
     BaseType_t btn_ret = xTaskCreatePinnedToCore(button_task_handler, 
                                                 "Btn task", 
                                                 4096, 
-                                                NULL, 
+                                                &button_cfg_str, 
                                                 7, 
                                                 &button_task_h, 
                                                 1);
@@ -343,11 +428,10 @@ void app_main(void)
     BaseType_t measure_ret = xTaskCreatePinnedToCore(measure_task_handler, 
                                                     "Btn task", 
                                                     4096, 
-                                                    NULL, 
+                                                    &measure_cfg_str, 
                                                     5, 
                                                     &measure_task_h, 
                                                     0);
-    
     if (measure_ret == pdPASS)
     {
         ESP_LOGI(INIT_TAG, "measure task created\r\n");
@@ -358,9 +442,18 @@ void app_main(void)
         while (1);
     }
 
-    //INIT DONE, MOVE ON TO IDLE STATE
-    xTaskNotify(director_task_h, 1 << STATE_IDLE, eSetBits);
+    generic_event_t end_init_evt = 
+    {
+        .comp_id = COMP_ID_MAIN,
+        .event_id = INIT_ENDED,
+        .param = 0
+    };
 
+    BaseType_t end_q_end_ret = xQueueSend(xDirectorEvtQueue, &end_init_evt, 10);
+    if (end_q_end_ret != pdTRUE)
+    {
+        ESP_LOGE(INIT_TAG, "Failed to send INIT END EVT\r\n");
+    }
 
     return;
 }

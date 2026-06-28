@@ -28,12 +28,18 @@ typedef enum
     STATE_ERROR
 }system_state_t;
 
+typedef enum
+{
+    INIT_STARTED = 0,
+    INIT_ENDED = 1,
+}init_event_id_t;
+
 typedef struct 
 {
-    QueueHandle_t evt_queue;
-    TaskHandle_t led_task;
-    TaskHandle_t btn_task;
-    TaskHandle_t measure_task;
+    QueueHandle_t   *evt_queue;
+    TaskHandle_t    *led_task;
+    TaskHandle_t    *btn_task;
+    TaskHandle_t    *measure_task;
 
 }director_task_config_t;
 

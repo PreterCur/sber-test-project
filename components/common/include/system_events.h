@@ -7,7 +7,8 @@ typedef enum
 {
     COMP_ID_BUTTON,
     COMP_ID_MEASURE,
-    COMP_ID_LED
+    COMP_ID_LED,
+    COMP_ID_MAIN,
 } component_id_t;
 
 typedef struct 
