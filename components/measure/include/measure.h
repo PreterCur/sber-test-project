@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <string.h>
 
 #include "esp_log.h"
 
@@ -17,6 +18,8 @@
 #include "esp_http_client.h"
 
 #include "system_events.h"
+
+#include "user_wifi.h"
 
 
 #define ADC_MAX_READINGS                    (uint32_t)10000
@@ -41,6 +44,7 @@ typedef enum
     MEASURE_START = 0,
     MEASURE_BTN_INTERRUPT,
     MEASURE_FULL_INTERRUPT,
+    MEASURE_GENERATE_CSV,
     MEASURE_START_UPLOAD,
     
     //notification from adc isr

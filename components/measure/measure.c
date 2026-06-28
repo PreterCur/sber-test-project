@@ -6,8 +6,13 @@ static const char *CSV_TAG = "CSV";
 
 static const char *WIFI_TAG = "WIFI";
 
-static size_t generate_csv_in_ram(const uint16_t *raw_buf, uint32_t sample_count, 
-                           char *out_csv_text, size_t max_text_len);
+static size_t generate_csv_in_ram(  const uint16_t *raw_buf, 
+                                    uint32_t sample_count, 
+                                    char *out_csv_text, 
+                                    size_t max_text_len);
+
+static void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes);
+        
 
 #define CSV_MAX_SIZE                        (size_t)100000
 char full_csv_buffer[CSV_MAX_SIZE] = {0,};
@@ -129,6 +134,18 @@ void measure_task_handler(void *pvParameters)
     adc_continuous_handle_t adc_h = NULL;
 
     init_adc_continuous(&adc_h, adc_conf_p);
+
+
+    wifi_nvs_init_user();
+    if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) {
+        /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
+         * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
+        esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
+    }
+
+    ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
+    wifi_init_sta();
+
 
     uint32_t measure_notify_val_bits = 0;
 
@@ -262,6 +279,7 @@ void measure_task_handler(void *pvParameters)
                         }
                         break;
                     }
+                    demonstrate_generated_csv(full_csv_buffer, csv_size);
 
 
                 }
@@ -360,20 +378,18 @@ static size_t generate_csv_in_ram(const uint16_t *raw_buf, uint32_t sample_count
  * @param max_buffer_size   Целевой размер буфера (например, 10000)
  * @param collected_count   Фактически собранное количество точек
  */
-void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes, 
-                                uint32_t sample_rate_hz, uint32_t max_buffer_size, 
-                                uint32_t collected_count)
+void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes)
 {
     if (csv_data == NULL || csv_size_bytes == 0) {
-        printf("Ошибка: Данные CSV пусты или не были сформированы.\n");
+        ESP_LOGE(CSV_TAG, "Ошибка: Данные CSV пусты или не были сформированы.\n");
         return;
     }
 
     // 1. Обязательный лог параметров сессии по ТЗ
-    printf("CSV created\n");
-    printf("CSV size: %zu bytes\n\n", csv_size_bytes);
+    ESP_LOGI(CSV_TAG, "CSV created\n");
+    ESP_LOGI(CSV_TAG, "CSV size: %zu bytes\n\n", csv_size_bytes);
 
-    printf("CSV preview:\n");
+    ESP_LOGI(CSV_TAG, "CSV preview:\n");
 
     // 2. Выводим первые строки (Заголовок "index,value\n" + первые 3 строки данных)
     // Нам нужно поймать ровно 4 переноса строки от начала файла
@@ -390,7 +406,7 @@ void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes,
     }
 
     // Печатаем обязательное по заданию многоточие
-    printf("...\n");
+    ESP_LOGI(CSV_TAG, "...\n");
 
     // 3. Выводим последние строки (последние 3 строки данных)
     // Сканируем буфер с конца назад, чтобы найти начало третьей строки снизу
