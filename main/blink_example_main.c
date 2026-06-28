@@ -197,18 +197,27 @@ void director_task(void *pvParameters)
                             case(EVT_ADC_BTN_INTERRUPT):
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "ADC stop event from BTN IRQ, ready to send data\r\n");
-
-                                //for debug
-                                current_state = STATE_WIFI_CONNECTING;
-                                state_update_led(*task_cfg_p->led_task, current_state);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_GENERATE_CSV), eSetBits);
                             }
                             break;
                             case(EVT_ADC_FULL_INTERRUPT):
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "ADC stop event, buf full IRQ, ready to send data\r\n");
-
-                                //for debug
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_GENERATE_CSV), eSetBits);
+                            }
+                            break;
+                            case(EVT_CSV_CREATED):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "CSV Created event, start wifi sequence\r\n");
                                 current_state = STATE_WIFI_CONNECTING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_WIFI_CONNECT), eSetBits);
+                            }
+                            break;
+                            case(EVT_CSV_CREATE_ERROR):
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "CSV Creation Error\r\n");
+                                current_state = STATE_ERROR;
                                 state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;

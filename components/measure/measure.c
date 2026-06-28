@@ -259,19 +259,21 @@ void measure_task_handler(void *pvParameters)
                     }
                 }
                 break;
-                case(MEASURE_START_UPLOAD):
+                case(MEASURE_GENERATE_CSV):
                 {
+                    ESP_LOGI(CSV_TAG, "CSV Created callback\r\n");
+                    generic_event_t cvs_evt = 
+                    {
+                        .comp_id = COMP_ID_MEASURE,
+                        
+                        .param = 0
+                    };
                     size_t csv_size = generate_csv_in_ram(adc_conf_p->adc_multiframe_buf, adc_conf_p->adc_read_num, full_csv_buffer, sizeof(full_csv_buffer));
                     if (csv_size == 0)
                     {
-                        generic_event_t csv_create_err_evt = 
-                        {
-                            .comp_id = COMP_ID_MEASURE,
-                            .event_id = EVT_CSV_CREATE_ERROR,
-                            .param = 0
-                        };
+                        cvs_evt.event_id = EVT_CSV_CREATE_ERROR;
                         ESP_LOGE(CSV_TAG, "Failed CSV generation\r\n");
-                        BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &csv_create_err_evt, 0);
+                        BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &cvs_evt, 0);
                         if (full_queue_ret != pdTRUE)
                         {
                             ESP_LOGE(CSV_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
@@ -279,7 +281,27 @@ void measure_task_handler(void *pvParameters)
                         }
                         break;
                     }
+
                     demonstrate_generated_csv(full_csv_buffer, csv_size);
+                    cvs_evt.event_id = EVT_CSV_CREATED;
+
+                    BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &cvs_evt, 0);
+                    if (full_queue_ret != pdTRUE)
+                    {
+                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                        break;
+                    }
+                }
+                break;
+                case(MEASURE_WIFI_CONNECT):
+                {
+                    ESP_LOGI(CSV_TAG, "WIFI Connect callback\r\n");
+
+                }
+                break;
+                case(MEASURE_START_UPLOAD):
+                {
+                    
 
 
                 }
