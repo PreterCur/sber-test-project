@@ -141,10 +141,9 @@ void director_task(void *pvParameters)
                             case(EVT_BUTTON_SHORT_CLICK):
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "Send START cmd to measure task\r\n");
-                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_START), eSetBits);
-
                                 current_state = STATE_MEASURING;
                                 state_update_led(*task_cfg_p->led_task, current_state);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_START), eSetBits);
                             }
                             break;
                             case(EVT_BUTTON_LONG_CLICK):
@@ -204,6 +203,13 @@ void director_task(void *pvParameters)
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "ADC stop event, buf full IRQ, ready to send data\r\n");
                                 xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_GENERATE_CSV), eSetBits);
+                            }
+                            break;
+                            case(EVT_ADC_OVERFLOW_ERR):
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "ADC Overflow ERR event!\r\n");
+                                current_state = STATE_ERROR;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             case(EVT_CSV_CREATED):
@@ -292,7 +298,28 @@ void director_task(void *pvParameters)
                 break;
                 case (STATE_ERROR):
                 {
-
+                    if (evt_queue_recv.comp_id == COMP_ID_BUTTON)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_BUTTON_SHORT_CLICK):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "BTN Interrupt, getting out of ERR State\r\n");
+                                current_state = STATE_IDLE;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported ERROR BTN cmd!\r\n");
+                            }
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGE(ERROR_TAG, "Unsupported ERR EVT");
+                    }
                 }
                 break;
                 default:
@@ -321,14 +348,18 @@ measure_task_congif_t measure_cfg_str =
         .output_type                = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
         .sample_freq                = 1000,
         
+        .adc_dma_frame              = adc_dma_chunk_buf,
         .single_conv_frame_size     = ADC_DMA_SINGLE_FRAME_LEN * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
-        .frame_buffer_size          = ADC_MAX_READINGS * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
+        //buffer includes possible overflow scenario
+        .frame_buffer_size          = 4 * ADC_DMA_SINGLE_FRAME_LEN * SOC_ADC_DIGI_DATA_BYTES_PER_CONV,
 
         .adc_multiframe_buf         = adc_data_buf,
-        .adc_dma_frame              = adc_dma_chunk_buf,
+        .max_readings_num           = ADC_MAX_READINGS,
         
-        .callback_func              = NULL,
+        .conv_done_cb_func          = NULL,
+        .pool_ovf_cb_func           = NULL,
         .adc_task                   = &measure_task_h,
+
     },
     .evt_queue_h = &xDirectorEvtQueue,
 };
@@ -435,7 +466,7 @@ void app_main(void)
 
     //wifi task should be pinned to core 0 but am not sure
     BaseType_t measure_ret = xTaskCreatePinnedToCore(measure_task_handler, 
-                                                    "Btn task", 
+                                                    "Measure task", 
                                                     4096, 
                                                     &measure_cfg_str, 
                                                     5, 

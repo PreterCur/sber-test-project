@@ -1,4 +1,4 @@
 idf_component_register(SRCS "blink_example_main.c"
                        INCLUDE_DIRS "."
-                       REQUIRES common measure user_led button)
+                       REQUIRES common measure user_led button esp_psram)
 

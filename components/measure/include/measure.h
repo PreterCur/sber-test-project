@@ -15,8 +15,6 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
-#include "esp_http_client.h"
-
 #include "system_events.h"
 
 #include "user_wifi.h"
@@ -51,6 +49,7 @@ typedef enum
     
     //notification from adc isr
     MEASURE_BUF_FULL_CALLBACK = 20,
+    MEASURE_CONV_DONE_CALLBACK,
     MEASURE_BUF_OVERFLOW_ERROR_CB = 30,
 }measure_cmd_t;
 
@@ -59,9 +58,10 @@ typedef struct
 {
     adc_digi_output_data_t      *adc_dma_frame;
     uint32_t                    single_conv_frame_size;
+    uint32_t                    frame_buffer_size;
 
     uint16_t                    *adc_multiframe_buf;//using 4 vytes for a massive buffer is excessive
-    uint32_t                    frame_buffer_size;
+    uint32_t                    max_readings_num;
 
     uint32_t                    sample_freq;
     adc_digi_output_format_t    output_type;//type 2 for esp32s3
@@ -70,10 +70,12 @@ typedef struct
     uint8_t                     adc_unit;
 
     uint32_t                    adc_read_num;
+    uint32_t                    csv_datapoints;
 
     TaskHandle_t                *adc_task;
 
-    adc_continuous_callback_t   callback_func;
+    adc_continuous_callback_t   conv_done_cb_func;
+    adc_continuous_callback_t   pool_ovf_cb_func;
 }user_adc_t;
 
 typedef struct

@@ -1,3 +1,3 @@
-idf_component_register(SRCS "user_wifi.c" "measure.c"
+idf_component_register(SRCS "measure.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES common driver esp_http_client esp_wifi esp_timer esp_adc nvs_flash)
+                    REQUIRES common driver esp_timer esp_adc user_wifi)

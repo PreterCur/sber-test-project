@@ -16,7 +16,7 @@ static void upload_csv_to_server(const char *csv_data, size_t data_len);
 
 
 #define CSV_MAX_SIZE                        (size_t)100000
-char full_csv_buffer[CSV_MAX_SIZE] = {0,};
+char full_csv_buffer[CSV_MAX_SIZE] = {0, };
 
 
 
@@ -25,7 +25,7 @@ static void init_adc_continuous(adc_continuous_handle_t *out_handle, user_adc_t 
     // 1. Allocate the continuous mode master handle
     adc_continuous_handle_cfg_t adc_config = 
     {
-        .max_store_buf_size = user_adc_p->frame_buffer_size, // Internal pool for DMA descriptors
+        .max_store_buf_size = user_adc_p->frame_buffer_size, //frame buffer is bigger than single frame but no a massive buffer, we have separate buf in main for full adc readings data
         .conv_frame_size    = user_adc_p->single_conv_frame_size,
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, out_handle));
@@ -55,21 +55,32 @@ static void init_adc_continuous(adc_continuous_handle_t *out_handle, user_adc_t 
 
     // 3. Register asynchronous conversion event callbacks
     adc_continuous_evt_cbs_t cbs = {
-        .on_conv_done = user_adc_p->callback_func,
+        .on_conv_done = user_adc_p->conv_done_cb_func,
+        // .on_pool_ovf = user_adc_p->pool_ovf_cb_func
     };
     ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(*out_handle, &cbs, (void *)user_adc_p));
 }
 
 //user data is registered in adc_continuous_register_event_callbacks, i use user_adc_t pointer
-static bool IRAM_ATTR adc_coexist_cb(adc_continuous_handle_t handle, 
-                                     const adc_continuous_evt_data_t *edata, 
-                                     void *user_data)
+static bool IRAM_ATTR adc_coexist_cb(   adc_continuous_handle_t handle, 
+                                        const adc_continuous_evt_data_t *edata, 
+                                        void *user_data)
 {
     BaseType_t high_task_wakeup = pdFALSE;
     user_adc_t *adc_str_p = (user_adc_t *)user_data;
     // Notify the processing task that new data is available in the DMA buffer
     xTaskNotifyFromISR(*adc_str_p->adc_task, BIT(MEASURE_BUF_OVERFLOW_ERROR_CB), eSetBits, &high_task_wakeup);
     return high_task_wakeup;
+}
+
+static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
+{
+    BaseType_t mustYield = pdFALSE;
+    user_adc_t *adc_str_p = (user_adc_t *)user_data;
+    //Notify that ADC continuous driver has done enough number of conversions
+    xTaskNotifyFromISR(*adc_str_p->adc_task, BIT(MEASURE_CONV_DONE_CALLBACK), eSetBits, &mustYield);
+
+    return mustYield;
 }
 
 void measure_task_handler(void *pvParameters)
@@ -93,217 +104,209 @@ void measure_task_handler(void *pvParameters)
     user_adc_t *adc_conf_p = &measure_task_cfg->adc_config;
 
     //add callback here for now, maybe should move this initialization to main
-    adc_conf_p->callback_func = adc_coexist_cb;
-    if (adc_conf_p->callback_func == NULL)
-    {
-        ESP_LOGE(ADC_TAG, "ADC Callback NULLPTR\r\n");
-        while (1);
-    }
+    adc_conf_p->conv_done_cb_func = s_conv_done_cb;
 
     adc_continuous_handle_t adc_h = NULL;
 
     init_adc_continuous(&adc_h, adc_conf_p);
 
 
-    wifi_nvs_init_user();
-    if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) {
-        /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
-         * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
-        esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
-    }
+    // wifi_nvs_init_user();
+    // if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) {
+    //     /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
+    //      * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
+    //     esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
+    // }
 
-    ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
-    ESP_ERROR_CHECK(wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS)));
+    // ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
+    // ESP_ERROR_CHECK(wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS)));
 
 
     uint32_t measure_notify_val_bits = 0;
 
-    bool is_measuring = false;
     TickType_t sleep_time = portMAX_DELAY;
+
+    ESP_LOGI(ADC_TAG, "Measure task loop start!");
 
     while (1)
     {
-        if (is_measuring)
-        {
-            sleep_time = pdMS_TO_TICKS(100);
-        }
-        else
-        {
-            sleep_time = portMAX_DELAY;
-        }
-
         UBaseType_t adc_wait_ret = xTaskNotifyWait(0x00, ULONG_MAX, &measure_notify_val_bits, sleep_time);
         if (adc_wait_ret == pdPASS)
         {
-            uint32_t measure_cmd = log2(measure_notify_val_bits);
-            // ESP_LOGI(ADC_TAG, "received %#X cmd, %#X bits\r\n", measure_cmd, measure_notify_val_bits);
-            switch(measure_cmd)
+            if (measure_notify_val_bits & BIT(MEASURE_CONV_DONE_CALLBACK))
             {
-                case(MEASURE_START):
+                ESP_LOGI(ADC_TAG, "ADC Frame read Notified, reading data");
+                uint32_t bytes_read = 0;
+                //pull out full frame size in case of buf overflow
+                //added a small timeout to not fall into adc overflow
+                esp_err_t ret = adc_continuous_read(adc_h, (uint8_t *)adc_conf_p->adc_dma_frame, adc_conf_p->frame_buffer_size, &bytes_read, pdMS_TO_TICKS(10));
+                if (ret == ESP_OK && bytes_read > 0) 
                 {
-                    ESP_LOGI(ADC_TAG, "Started ADC Measure, had %d measures read already\r\n", adc_conf_p->adc_read_num);
-                    ESP_ERROR_CHECK(adc_continuous_flush_pool(adc_h));
-                    ESP_ERROR_CHECK(adc_continuous_start(adc_h));
-                    is_measuring = true;
-                    adc_conf_p->adc_read_num = 0;
-                    ESP_LOGI(ADC_TAG, "Measurement started\n");
-                    ESP_LOGI(ADC_TAG,"ADC sample rate: %lu Hz\n", adc_conf_p->sample_freq);
-                    ESP_LOGI(ADC_TAG,"ADC buffer size: %lu\n", adc_conf_p->frame_buffer_size);
-                    
-                }
-                break;
-                case(MEASURE_BTN_INTERRUPT):
-                {
-                    //notify from Director task                    
-                    esp_err_t btn_stop_ret = adc_continuous_stop(adc_h);
-                    if (btn_stop_ret != ESP_OK)
+                    uint32_t samples_received = bytes_read / SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
+                    uint32_t buf_size_readings = adc_conf_p->max_readings_num;
+                    uint32_t buf_size_bytes = adc_conf_p->frame_buffer_size;
+                    ESP_LOGI(ADC_TAG, "ADC Frame reading %d samples", samples_received);
+                    for (uint32_t i = 0; i < samples_received; i++) 
                     {
-                        ESP_LOGW(ADC_TAG, "adc was already stopped via FULL CMD\r\n");
-                        ESP_ERROR_CHECK(btn_stop_ret);
-                    }
-                    is_measuring = false;
-                    ESP_LOGI(ADC_TAG, "Measurement stopped\n");
-
-                    ESP_LOGI(ADC_TAG, "ADC BTN IRQ, ADC samples collected: %d\r\n", adc_conf_p->adc_read_num);
-                    adc_conf_p->adc_read_num = 0;
-
-                    generic_event_t adc_btn_stop_evt = 
-                    {
-                        .comp_id = COMP_ID_MEASURE,
-                        .event_id = EVT_ADC_BTN_INTERRUPT,
-                        .param = 0
-                    };
-                    BaseType_t adc_btn_irq_ret = xQueueSend(measure_evt_queue_h, &adc_btn_stop_evt, 0);
-                    if (adc_btn_irq_ret != pdTRUE)
-                    {
-                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
-                        break;
-                    }
-                }
-                break;
-                case(MEASURE_BUF_FULL_CALLBACK):
-                {
-                    //notify from ADC ISR
-                    is_measuring = false;
-                    ESP_LOGI(ADC_TAG, "ADC BUF FULL, ADC samples collected: %d\r\n", adc_conf_p->adc_read_num);
-                    esp_err_t full_adc_ret = adc_continuous_stop(adc_h);
-                    if (full_adc_ret != ESP_OK)
-                    {
-                        ESP_LOGW(ADC_TAG, "adc was stopped before ADC FULL but still went into BTN CMD\r\n");
-                        ESP_ERROR_CHECK(full_adc_ret);
-                    }
-
-                    ESP_LOGI(ADC_TAG, "Measurement stopped\n");
-
-                    adc_conf_p->adc_read_num = 0;
-
-                    generic_event_t adc_full_evt = 
-                    {
-                        .comp_id = COMP_ID_MEASURE,
-                        .event_id = EVT_ADC_FULL_INTERRUPT,
-                        .param = 0
-                    };
-                    BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &adc_full_evt, 0);
-                    if (full_queue_ret != pdTRUE)
-                    {
-                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
-                        break;
-                    }
-                }
-                break;
-                case(MEASURE_BUF_OVERFLOW_ERROR_CB):
-                {
-                    ESP_LOGE(ADC_TAG, "ADC BUF OVERFLOW ERROR\r\n");
-                    generic_event_t adc_overflow_err_evt = 
-                    {
-                        .comp_id = COMP_ID_MEASURE,
-                        .event_id = EVT_ADC_OVERFLOW_ERR,
-                        .param = 0
-                    };
-                    BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &adc_overflow_err_evt, 0);
-                    if (full_queue_ret != pdTRUE)
-                    {
-                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
-                        break;
-                    }
-                }
-                break;
-                case(MEASURE_GENERATE_CSV):
-                {
-                    ESP_LOGI(CSV_TAG, "CSV Created callback\r\n");
-                    generic_event_t cvs_evt = 
-                    {
-                        .comp_id = COMP_ID_MEASURE,
-                        
-                        .param = 0
-                    };
-                    size_t csv_size = generate_csv_in_ram(adc_conf_p->adc_multiframe_buf, adc_conf_p->adc_read_num, full_csv_buffer, sizeof(full_csv_buffer));
-                    if (csv_size == 0)
-                    {
-                        cvs_evt.event_id = EVT_CSV_CREATE_ERROR;
-                        ESP_LOGE(CSV_TAG, "Failed CSV generation\r\n");
-                        BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &cvs_evt, 0);
-                        if (full_queue_ret != pdTRUE)
+                        //save adc data as uint16_t into a big buffer
+                        adc_conf_p->adc_multiframe_buf[adc_conf_p->adc_read_num] = adc_conf_p->adc_dma_frame[i].type2.data;
+                        adc_conf_p->adc_read_num++;
+                        if (adc_conf_p->adc_read_num >= buf_size_readings)
                         {
-                            ESP_LOGE(CSV_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
                             break;
                         }
-                        break;
                     }
 
-                    demonstrate_generated_csv(full_csv_buffer, csv_size);
-                    cvs_evt.event_id = EVT_CSV_CREATED;
+                    if (adc_conf_p->adc_read_num >= buf_size_readings)
+                    {
+                        xTaskNotify(*adc_conf_p->adc_task, (uint32_t)BIT(MEASURE_BUF_FULL_CALLBACK), eSetBits);
+                        portYIELD();
+                    }
+                }
+                else if (ret == ESP_ERR_TIMEOUT)
+                {
+                    ESP_LOGW(ADC_TAG, "ADC Timeout Overflow, do nothing, wait for next read, %d bytes read", bytes_read);
+                }
+                else
+                {
+                    ESP_LOGE(ADC_TAG, "ADC Cont read err = %s", esp_err_to_name(ret));
+                }
+            }
 
+            if (measure_notify_val_bits & BIT(MEASURE_START))
+            {
+                ESP_LOGI(ADC_TAG, "Started ADC Measure, had %d measures read already\r\n", adc_conf_p->adc_read_num);
+                ESP_ERROR_CHECK(adc_continuous_flush_pool(adc_h));
+                ESP_ERROR_CHECK(adc_continuous_start(adc_h));
+                adc_conf_p->adc_read_num = 0;
+                ESP_LOGI(ADC_TAG, "Measurement started\n");
+                ESP_LOGI(ADC_TAG,"ADC sample rate: %lu Hz\n", adc_conf_p->sample_freq);
+                ESP_LOGI(ADC_TAG,"ADC buffer size: %lu\n", adc_conf_p->max_readings_num);
+            }
+            if (measure_notify_val_bits & BIT(MEASURE_BTN_INTERRUPT))
+            {
+                //notify from Director task                    
+                esp_err_t btn_stop_ret = adc_continuous_stop(adc_h);
+                if (btn_stop_ret != ESP_OK)
+                {
+                    ESP_LOGW(ADC_TAG, "adc was already stopped via FULL CMD\r\n");
+                    ESP_ERROR_CHECK(btn_stop_ret);
+                }
+                ESP_LOGI(ADC_TAG, "Measurement stopped\n");
+
+                ESP_LOGI(ADC_TAG, "ADC BTN IRQ, ADC samples collected: %d\r\n", adc_conf_p->adc_read_num);
+                adc_conf_p->csv_datapoints = adc_conf_p->adc_read_num;
+                adc_conf_p->adc_read_num = 0;
+
+                generic_event_t adc_btn_stop_evt = 
+                {
+                    .comp_id = COMP_ID_MEASURE,
+                    .event_id = EVT_ADC_BTN_INTERRUPT,
+                    .param = 0
+                };
+                BaseType_t adc_btn_irq_ret = xQueueSend(measure_evt_queue_h, &adc_btn_stop_evt, 0);
+                if (adc_btn_irq_ret != pdTRUE)
+                {
+                    ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    break;
+                }
+            }
+            if (measure_notify_val_bits & BIT(MEASURE_BUF_FULL_CALLBACK))
+            {
+                //notify from ADC ISR
+                ESP_LOGI(ADC_TAG, "ADC BUF FULL, ADC samples collected: %d\r\n", adc_conf_p->adc_read_num);
+                esp_err_t full_adc_ret = adc_continuous_stop(adc_h);
+                if (full_adc_ret != ESP_OK)
+                {
+                    ESP_LOGW(ADC_TAG, "adc was stopped before ADC FULL but still went into BTN CMD\r\n");
+                    ESP_ERROR_CHECK(full_adc_ret);
+                }
+
+                ESP_LOGI(ADC_TAG, "Measurement stopped\n");
+
+                adc_conf_p->csv_datapoints = adc_conf_p->adc_read_num;
+                adc_conf_p->adc_read_num = 0;
+
+                generic_event_t adc_full_evt = 
+                {
+                    .comp_id = COMP_ID_MEASURE,
+                    .event_id = EVT_ADC_FULL_INTERRUPT,
+                    .param = 0
+                };
+                BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &adc_full_evt, 0);
+                if (full_queue_ret != pdTRUE)
+                {
+                    ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    break;
+                }
+            }
+            
+            if (measure_notify_val_bits & BIT(MEASURE_BUF_OVERFLOW_ERROR_CB))
+            {
+                ESP_LOGE(ADC_TAG, "ADC BUF OVERFLOW ERROR\r\n");
+                
+                esp_err_t adc_ovf_ret = adc_continuous_stop(adc_h);
+                if (adc_ovf_ret != ESP_OK)
+                {
+                    ESP_LOGW(ADC_TAG, "ADC OVF ERR, failed to stop ADC\r\n");
+                    ESP_ERROR_CHECK(adc_ovf_ret);
+                }
+                ESP_LOGE(ADC_TAG, "ADC OVF ERR, ADC stopped");
+
+                generic_event_t adc_overflow_err_evt = 
+                {
+                    .comp_id = COMP_ID_MEASURE,
+                    .event_id = EVT_ADC_OVERFLOW_ERR,
+                    .param = 0
+                };
+                BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &adc_overflow_err_evt, 0);
+                if (full_queue_ret != pdTRUE)
+                {
+                    ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    break;
+                }
+            }
+            if (measure_notify_val_bits & BIT(MEASURE_GENERATE_CSV))
+            {
+                ESP_LOGI(CSV_TAG, "CSV Created callback\r\n");
+                generic_event_t cvs_evt = 
+                {
+                    .comp_id = COMP_ID_MEASURE,
+                    
+                    .param = 0
+                };
+                size_t csv_size = generate_csv_in_ram(adc_conf_p->adc_multiframe_buf, adc_conf_p->csv_datapoints, full_csv_buffer, sizeof(full_csv_buffer));
+                if (csv_size == 0)
+                {
+                    cvs_evt.event_id = EVT_CSV_CREATE_ERROR;
+                    ESP_LOGE(CSV_TAG, "Failed CSV generation\r\n");
                     BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &cvs_evt, 0);
                     if (full_queue_ret != pdTRUE)
                     {
-                        ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                        ESP_LOGE(CSV_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
                         break;
                     }
+                    break;
                 }
-                break;
-                case(MEASURE_WIFI_CONNECT):
+
+                demonstrate_generated_csv(full_csv_buffer, csv_size);
+                cvs_evt.event_id = EVT_CSV_CREATED;
+
+                BaseType_t full_queue_ret = xQueueSend(measure_evt_queue_h, &cvs_evt, 0);
+                if (full_queue_ret != pdTRUE)
                 {
-                    ESP_LOGI(CSV_TAG, "WIFI Connect callback\r\n");
-
+                    ESP_LOGE(ADC_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    break;
                 }
-                break;
-                case(MEASURE_START_UPLOAD):
-                {
-                    
-
-
-                }
-                break;
             }
-        }
-
-        if (is_measuring)
-        {
-            uint32_t bytes_read = 0;
-            esp_err_t ret = adc_continuous_read(adc_h, (uint8_t *)adc_conf_p->adc_dma_frame, adc_conf_p->single_conv_frame_size, &bytes_read, 0);
-            if (ret == ESP_OK && bytes_read > 0) 
+            if (measure_notify_val_bits & BIT(MEASURE_WIFI_CONNECT))
             {
-                uint32_t samples_received = bytes_read / SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
-                uint32_t buf_size_readings = adc_conf_p->frame_buffer_size / SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
-                uint32_t buf_size_bytes = adc_conf_p->frame_buffer_size;
-                for (uint32_t i = 0; i < samples_received; i++) 
-                {
-                    //save adc data as uint16_t into a big buffer
-                    adc_conf_p->adc_multiframe_buf[adc_conf_p->adc_read_num] = adc_conf_p->adc_dma_frame[i].type2.data;
-                    adc_conf_p->adc_read_num++;
-                    if (adc_conf_p->adc_read_num >= buf_size_readings)
-                    {
-                        break;
-                    }
-                }
+                ESP_LOGI(CSV_TAG, "WIFI Connect callback\r\n");
 
-                if (adc_conf_p->adc_read_num >= buf_size_readings)
-                {
-                    is_measuring = false;
-                    xTaskNotify(*adc_conf_p->adc_task, (uint32_t)BIT(MEASURE_BUF_FULL_CALLBACK), eSetBits);
-                    portYIELD();
-                }
+            }
+            if (measure_notify_val_bits & BIT(MEASURE_START_UPLOAD))
+            {
+                
             }
         }
     }

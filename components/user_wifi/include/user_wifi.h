@@ -14,6 +14,9 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include "esp_http_client.h"
+
+
 #define CONFIG_ESP_STATION_EXAMPLE_WPA3_SAE_PWE_BOTH 1
 #define CONFIG_ESP_WIFI_PW_ID ""
 #define CONFIG_ESP_MAXIMUM_RETRY 5
@@ -57,6 +60,9 @@
 
 void wifi_nvs_init_user(void);
 esp_err_t wifi_station_init(char *ssid, size_t ssid_size, char *password, size_t password_size);
+
+void wifi_disconnect_disable(void);
+
 
 
 #endif
