@@ -134,7 +134,7 @@ void measure_task_handler(void *pvParameters)
         {
             if (measure_notify_val_bits & BIT(MEASURE_CONV_DONE_CALLBACK))
             {
-                ESP_LOGI(ADC_TAG, "ADC Frame read Notified, reading data");
+                // ESP_LOGI(ADC_TAG, "ADC Frame read Notified, reading data");
                 uint32_t bytes_read = 0;
                 //pull out full frame size in case of buf overflow
                 //added a small timeout to not fall into adc overflow
@@ -144,7 +144,7 @@ void measure_task_handler(void *pvParameters)
                     uint32_t samples_received = bytes_read / SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
                     uint32_t buf_size_readings = adc_conf_p->max_readings_num;
                     uint32_t buf_size_bytes = adc_conf_p->frame_buffer_size;
-                    ESP_LOGI(ADC_TAG, "ADC Frame reading %d samples", samples_received);
+                    // ESP_LOGI(ADC_TAG, "ADC Frame reading %d samples", samples_received);
                     for (uint32_t i = 0; i < samples_received; i++) 
                     {
                         //save adc data as uint16_t into a big buffer
@@ -469,15 +469,15 @@ static size_t generate_csv_in_ram(const uint16_t *raw_buf, uint32_t sample_count
 void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes)
 {
     if (csv_data == NULL || csv_size_bytes == 0) {
-        ESP_LOGE(CSV_TAG, "Ошибка: Данные CSV пусты или не были сформированы.\n");
+        ESP_LOGE(CSV_TAG, "Error: CSV data empty or NULLPTR\n");
         return;
     }
 
     // 1. Обязательный лог параметров сессии по ТЗ
-    ESP_LOGI(CSV_TAG, "CSV created\n");
-    ESP_LOGI(CSV_TAG, "CSV size: %zu bytes\n\n", csv_size_bytes);
+    printf("CSV created\n");
+    printf("CSV size: %zu bytes\n\n", csv_size_bytes);
 
-    ESP_LOGI(CSV_TAG, "CSV preview:\n");
+    printf("CSV preview:\n");
 
     // 2. Выводим первые строки (Заголовок "index,value\n" + первые 3 строки данных)
     // Нам нужно поймать ровно 4 переноса строки от начала файла
@@ -494,7 +494,7 @@ void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes)
     }
 
     // Печатаем обязательное по заданию многоточие
-    ESP_LOGI(CSV_TAG, "...\n");
+    printf("...\n");
 
     // 3. Выводим последние строки (последние 3 строки данных)
     // Сканируем буфер с конца назад, чтобы найти начало третьей строки снизу
@@ -524,4 +524,5 @@ void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes)
         size_t bytes_to_write = csv_size_bytes - bottom_index;
         fwrite(&csv_data[bottom_index], 1, bytes_to_write, stdout);
     }
+    printf("\r\n");
 }
