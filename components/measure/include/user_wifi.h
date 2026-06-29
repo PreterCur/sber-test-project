@@ -19,7 +19,7 @@
 #define CONFIG_ESP_MAXIMUM_RETRY 5
 #define CONFIG_ESP_WIFI_AUTH_WPA2_PSK 1
 
-#define EXAMPLE_ESP_WIFI_SSID      "HEADPROBLEMS"
+#define EXAMPLE_ESP_WIFI_SSID      "headproblems"
 #define EXAMPLE_ESP_WIFI_PASS      "21032103"
 #define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
 
@@ -56,7 +56,7 @@
 
 
 void wifi_nvs_init_user(void);
-void wifi_init_sta(void);
+esp_err_t wifi_station_init(char *ssid, size_t ssid_size, char *password, size_t password_size);
 
 
 #endif

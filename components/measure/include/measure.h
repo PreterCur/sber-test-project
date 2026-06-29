@@ -51,7 +51,7 @@ typedef enum
     
     //notification from adc isr
     MEASURE_BUF_FULL_CALLBACK = 20,
-    MEASURE_BUF_OVERFLOW_CALLBACK = 30,
+    MEASURE_BUF_OVERFLOW_ERROR_CB = 30,
 }measure_cmd_t;
 
 //struct for single channel ADC use

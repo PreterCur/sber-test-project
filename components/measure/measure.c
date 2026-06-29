@@ -12,7 +12,8 @@ static size_t generate_csv_in_ram(  const uint16_t *raw_buf,
                                     size_t max_text_len);
 
 static void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes);
-        
+static void upload_csv_to_server(const char *csv_data, size_t data_len);
+
 
 #define CSV_MAX_SIZE                        (size_t)100000
 char full_csv_buffer[CSV_MAX_SIZE] = {0,};
@@ -67,41 +68,9 @@ static bool IRAM_ATTR adc_coexist_cb(adc_continuous_handle_t handle,
     BaseType_t high_task_wakeup = pdFALSE;
     user_adc_t *adc_str_p = (user_adc_t *)user_data;
     // Notify the processing task that new data is available in the DMA buffer
-    xTaskNotifyFromISR(*adc_str_p->adc_task, BIT(MEASURE_BUF_OVERFLOW_CALLBACK), eSetBits, &high_task_wakeup);
+    xTaskNotifyFromISR(*adc_str_p->adc_task, BIT(MEASURE_BUF_OVERFLOW_ERROR_CB), eSetBits, &high_task_wakeup);
     return high_task_wakeup;
 }
-
-void upload_csv_to_server(const char *csv_data, size_t data_len)
-{
-    // 1. Настраиваем конфигурацию клиента (прямо как в примерах ESP-IDF)
-    esp_http_client_config_t config = {
-        .url = "http://192.168.10.179:8080/upload", // URL твоего локального сервера
-        .method = HTTP_METHOD_POST,               // Метод отправки
-        .timeout_ms = 5000,                       // Таймаут ожидания ответа
-    };
-    
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-
-    // 2. Устанавливаем тип контента, чтобы Java-сервер не гадал, что это
-    esp_http_client_set_header(client, "Content-Type", "text/csv");
-
-    // 3. Привязываем наш готовый большой текстовый буфер к телу POST-запроса
-    esp_http_client_set_post_field(client, csv_data, data_len);
-
-    // 4. Выполняем отправку (отправляет данные и ждет ответ от сервера)
-    esp_err_t err = esp_http_client_perform(client);
-
-    if (err == ESP_OK) {
-        int status_code = esp_http_client_get_status_code(client);
-        ESP_LOGI("HTTP", "Данные улетели! Статус ответа сервера: %d", status_code);
-    } else {
-        ESP_LOGE("HTTP", "Ошибка отправки: %s", esp_err_to_name(err));
-    }
-
-    // 5. Обязательно освобождаем ресурсы клиента
-    esp_http_client_cleanup(client);
-}
-
 
 void measure_task_handler(void *pvParameters)
 {
@@ -144,7 +113,7 @@ void measure_task_handler(void *pvParameters)
     }
 
     ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
-    wifi_init_sta();
+    ESP_ERROR_CHECK(wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS)));
 
 
     uint32_t measure_notify_val_bits = 0;
@@ -242,7 +211,7 @@ void measure_task_handler(void *pvParameters)
                     }
                 }
                 break;
-                case(MEASURE_BUF_OVERFLOW_CALLBACK):
+                case(MEASURE_BUF_OVERFLOW_ERROR_CB):
                 {
                     ESP_LOGE(ADC_TAG, "ADC BUF OVERFLOW ERROR\r\n");
                     generic_event_t adc_overflow_err_evt = 
@@ -340,7 +309,36 @@ void measure_task_handler(void *pvParameters)
     }
 }
 
+static void upload_csv_to_server(const char *csv_data, size_t data_len)
+{
+    // 1. Настраиваем конфигурацию клиента (прямо как в примерах ESP-IDF)
+    esp_http_client_config_t config = {
+        .url = "http://192.168.10.179:8080/upload", // URL твоего локального сервера
+        .method = HTTP_METHOD_POST,               // Метод отправки
+        .timeout_ms = 5000,                       // Таймаут ожидания ответа
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
 
+    // 2. Устанавливаем тип контента, чтобы Java-сервер не гадал, что это
+    esp_http_client_set_header(client, "Content-Type", "text/csv");
+
+    // 3. Привязываем наш готовый большой текстовый буфер к телу POST-запроса
+    esp_http_client_set_post_field(client, csv_data, data_len);
+
+    // 4. Выполняем отправку (отправляет данные и ждет ответ от сервера)
+    esp_err_t err = esp_http_client_perform(client);
+
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        ESP_LOGI("HTTP", "Данные улетели! Статус ответа сервера: %d", status_code);
+    } else {
+        ESP_LOGE("HTTP", "Ошибка отправки: %s", esp_err_to_name(err));
+    }
+
+    // 5. Обязательно освобождаем ресурсы клиента
+    esp_http_client_cleanup(client);
+}
 
 /**
  * @brief Конвертирует сырой бинарный буфер АЦП в текстовый формат CSV
