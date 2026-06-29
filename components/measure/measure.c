@@ -12,7 +12,7 @@ static size_t generate_csv_in_ram(  const uint16_t *raw_buf,
                                     size_t max_text_len);
 
 static void demonstrate_generated_csv(const char *csv_data, size_t csv_size_bytes);
-static void upload_csv_to_server(const char *csv_data, size_t data_len);
+static esp_err_t upload_csv_to_server(const char *csv_data, size_t data_len);
 
 
 #define CSV_MAX_SIZE                        (size_t)100000
@@ -110,17 +110,16 @@ void measure_task_handler(void *pvParameters)
 
     init_adc_continuous(&adc_h, adc_conf_p);
 
+    wifi_nvs_init_user();
+    if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) 
+    {
+        /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
+         * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
+        esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
+    }
 
-    // wifi_nvs_init_user();
-    // if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) {
-    //     /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
-    //      * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
-    //     esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
-    // }
-
-    // ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
-    // ESP_ERROR_CHECK(wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS)));
-
+    ESP_LOGI(WIFI_TAG, "ESP_WIFI_MODE_STA");
+    ESP_ERROR_CHECK(wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS)));
 
     uint32_t measure_notify_val_bits = 0;
 
@@ -272,7 +271,6 @@ void measure_task_handler(void *pvParameters)
                 generic_event_t cvs_evt = 
                 {
                     .comp_id = COMP_ID_MEASURE,
-                    
                     .param = 0
                 };
                 size_t csv_size = generate_csv_in_ram(adc_conf_p->adc_multiframe_buf, adc_conf_p->csv_datapoints, full_csv_buffer, sizeof(full_csv_buffer));
@@ -289,6 +287,9 @@ void measure_task_handler(void *pvParameters)
                     break;
                 }
 
+
+                adc_conf_p->csv_filesize = csv_size;
+
                 demonstrate_generated_csv(full_csv_buffer, csv_size);
                 cvs_evt.event_id = EVT_CSV_CREATED;
 
@@ -302,17 +303,78 @@ void measure_task_handler(void *pvParameters)
             if (measure_notify_val_bits & BIT(MEASURE_WIFI_CONNECT))
             {
                 ESP_LOGI(CSV_TAG, "WIFI Connect callback\r\n");
+                esp_err_t wifi_connect_ret = wifi_config_connect();
+                if (wifi_connect_ret != ESP_OK)
+                {
+                    generic_event_t wifi_err_evt = 
+                    {
+                        .comp_id = COMP_ID_MEASURE,
+                        .event_id = EVT_WIFI_ERROR,
+                        .param = 0
+                    };
+                    BaseType_t err_q_ret = xQueueSend(measure_evt_queue_h, &wifi_err_evt, 0);
+                    if (err_q_ret != pdTRUE)
+                    {
+                        ESP_LOGE(WIFI_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    }
+                }
+                else
+                {
+                    ESP_LOGI(WIFI_TAG, "WIFI Connected");
+                    generic_event_t wifi_conn_evt = 
+                    {
+                        .comp_id = COMP_ID_MEASURE,
+                        .event_id = EVT_WIFI_CONNECTED,
+                        .param = 0
+                    };
+                    BaseType_t conn_q_ret = xQueueSend(measure_evt_queue_h, &wifi_conn_evt, 0);
+                    if (conn_q_ret != pdTRUE)
+                    {
+                        ESP_LOGE(WIFI_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    }
+                }
 
             }
             if (measure_notify_val_bits & BIT(MEASURE_START_UPLOAD))
             {
-                
+                ESP_LOGI(WIFI_TAG, "Start uploading");
+                esp_err_t upload_ret = upload_csv_to_server(full_csv_buffer, adc_conf_p->csv_filesize);
+                if (upload_ret != ESP_OK)
+                {
+                    ESP_LOGE(WIFI_TAG, "Failed CSV Upload, err = %s", esp_err_to_name(upload_ret));
+                    generic_event_t upload_err_evt = 
+                    {
+                        .comp_id = COMP_ID_MEASURE,
+                        .event_id = EVT_UPLOAD_ERROR,
+                        .param = 0
+                    };
+                    BaseType_t conn_q_ret = xQueueSend(measure_evt_queue_h, &upload_err_evt, 0);
+                    if (conn_q_ret != pdTRUE)
+                    {
+                        ESP_LOGE(WIFI_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    }
+                }
+                else
+                {
+                    ESP_LOGI(WIFI_TAG, "CSV Upload Success");
+                    generic_event_t upload_evt = 
+                    {
+                        .comp_id = COMP_ID_MEASURE,
+                        .event_id = EVT_UPLOAD_DONE,
+                        .param = 0
+                    };
+                    BaseType_t conn_q_ret = xQueueSend(measure_evt_queue_h, &upload_evt, 0);
+                    if (conn_q_ret != pdTRUE)
+                    {
+                        ESP_LOGE(WIFI_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                    }
+                }
             }
         }
     }
 }
 
-static void upload_csv_to_server(const char *csv_data, size_t data_len)
+static esp_err_t upload_csv_to_server(const char *csv_data, size_t data_len)
 {
     // 1. Настраиваем конфигурацию клиента (прямо как в примерах ESP-IDF)
     esp_http_client_config_t config = {
@@ -332,15 +394,18 @@ static void upload_csv_to_server(const char *csv_data, size_t data_len)
     // 4. Выполняем отправку (отправляет данные и ждет ответ от сервера)
     esp_err_t err = esp_http_client_perform(client);
 
-    if (err == ESP_OK) {
+    if (err == ESP_OK) 
+    {
         int status_code = esp_http_client_get_status_code(client);
-        ESP_LOGI("HTTP", "Данные улетели! Статус ответа сервера: %d", status_code);
-    } else {
-        ESP_LOGE("HTTP", "Ошибка отправки: %s", esp_err_to_name(err));
+        ESP_LOGI("HTTP", "Data sent, server response status: %d", status_code);
+    } else 
+    {
+        ESP_LOGE("HTTP", "Send Error: %s", esp_err_to_name(err));
     }
-
+    
     // 5. Обязательно освобождаем ресурсы клиента
-    esp_http_client_cleanup(client);
+    esp_err_t cleanup_ret = esp_http_client_cleanup(client);
+    return err;
 }
 
 /**

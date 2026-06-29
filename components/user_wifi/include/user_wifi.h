@@ -61,6 +61,7 @@
 void wifi_nvs_init_user(void);
 esp_err_t wifi_station_init(char *ssid, size_t ssid_size, char *password, size_t password_size);
 
+esp_err_t wifi_config_connect(void);
 void wifi_disconnect_disable(void);
 
 

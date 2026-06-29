@@ -116,9 +116,14 @@ esp_err_t wifi_station_init(char *ssid, size_t ssid_size, char *password, size_t
     return ESP_OK;
 }
 
-void wifi_config_connect(void)
+esp_err_t wifi_config_connect(void)
 {
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_err_t wifi_start_ret = esp_wifi_start();
+    if (wifi_start_ret != ESP_OK)
+    {
+        ESP_ERROR_CHECK(wifi_start_ret);
+        return wifi_start_ret;
+    }
 
     ESP_LOGI(TAG, "wifi_init_sta finished.");
 
@@ -136,22 +141,27 @@ void wifi_config_connect(void)
     {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+        return ESP_OK;
     } else if (bits & WIFI_FAIL_BIT) 
     {
         ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
                  EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+        return ESP_ERR_WIFI_SSID;
     } else 
     {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        return ESP_ERR_NOT_FOUND;
     }
 }
 
 void wifi_disconnect_disable(void)
 {
     // 1. Разрываем соединение с точкой доступа
-    esp_wifi_disconnect();
+    esp_err_t wifi_disc_ret = esp_wifi_disconnect();
+    ESP_ERROR_CHECK(wifi_disc_ret);
     // 2. Полностью выключаем радиомодуль (выгружает аппаратные драйверы RF)
-    esp_wifi_stop();
+    esp_err_t wifi_stop_ret = esp_wifi_stop();
+    ESP_ERROR_CHECK(wifi_disc_ret);
     ESP_LOGI(W_TAG, "WIFI MODULE Disabled\r\n");
 }
 

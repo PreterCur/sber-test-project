@@ -122,12 +122,12 @@ void led_task_handler(void *pvParameters)
                 break;
                 case(LED_CMD_BLINK_YELLOW):
                 {
-                    led_struct_fill(&local_led, 20, 20, 0, LED_BLINK_PERIOD);
+                    led_struct_fill(&local_led, 30, 20, 0, LED_BLINK_PERIOD);
                 }
                 break;
                 case(LED_CMD_SOLID_YELLOW):
                 {
-                    led_struct_fill(&local_led, 20, 20, 0, 0);
+                    led_struct_fill(&local_led, 30, 20, 0, 0);
                 }
                 break;
                 case(LED_CMD_BLINK_RED):

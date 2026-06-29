@@ -244,12 +244,17 @@ void director_task(void *pvParameters)
                         {
                             case(EVT_WIFI_CONNECTED):
                             {
-
+                                ESP_LOGI(DIRECTOR_TAG, "WIFI Connected received in main, Start uploading");
+                                current_state = STATE_UPLOADING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+                                xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_START_UPLOAD), eSetBits);
                             }
                             break;
                             case(EVT_WIFI_ERROR):
                             {
-
+                                ESP_LOGE(DIRECTOR_TAG, "WIFI ERR received in main");
+                                current_state = STATE_ERROR;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             default:
@@ -269,12 +274,16 @@ void director_task(void *pvParameters)
                         {
                             case(EVT_UPLOAD_DONE):
                             {
-
+                                ESP_LOGI(DIRECTOR_TAG, "Upload SUCCESS received in main, back to idle");
+                                current_state = STATE_IDLE;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             case(EVT_UPLOAD_ERROR):
                             {
-
+                                ESP_LOGE(DIRECTOR_TAG, "Upload ERR received in main");
+                                current_state = STATE_ERROR;
+                                state_update_led(*task_cfg_p->led_task, current_state);
                             }
                             break;
                             default:

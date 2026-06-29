@@ -72,6 +72,8 @@ typedef struct
     uint32_t                    adc_read_num;
     uint32_t                    csv_datapoints;
 
+    uint32_t                    csv_filesize;
+
     TaskHandle_t                *adc_task;
 
     adc_continuous_callback_t   conv_done_cb_func;
