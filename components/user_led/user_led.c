@@ -54,8 +54,8 @@ static void led_struct_fill(led_str_t *leds_p, uint32_t red, uint32_t green, uin
 static void led_write_refresh(led_strip_handle_t *strip_p, led_str_t *leds_p)
 {
     int64_t now = esp_timer_get_time();
-    int64_t blink_time_elapsed = now - leds_p->last_blink_time;
-    if (blink_time_elapsed > leds_p->blink_period_ms * 1000)
+    int64_t blink_time_elapsed = (int64_t)(now - leds_p->last_blink_time);
+    if (blink_time_elapsed > (int64_t)(leds_p->blink_period_ms * 1000))
     {
         if (false == leds_p->is_led_on)
         {
@@ -92,54 +92,37 @@ void led_task_handler(void *pvParameters)
         BaseType_t led_notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &led_state_bits, pdMS_TO_TICKS(10));
         if (led_notify_ret == pdPASS)
         {
-            uint32_t led_state = log2(led_state_bits);
-            switch(led_state)
+            if (led_state_bits & BIT(LED_CMD_OFF))
             {
-                case(LED_CMD_OFF):
-                {
-                    led_struct_fill(&local_led, 0, 0, 0, 0);
-                }
-                break;
-                case(LED_CMD_BLINK_GREEN):
-                {
-                    led_struct_fill(&local_led, 0, 20, 0, LED_BLINK_PERIOD);
-                }
-                break;
-                case(LED_CMD_SOLID_GREEN):
-                {
-                    led_struct_fill(&local_led, 0, 20, 0, 0);
-                }
-                break;
-                case(LED_CMD_BLINK_BLUE):
-                {
-                    led_struct_fill(&local_led, 0, 0, 20, LED_BLINK_PERIOD);
-                }
-                break;
-                case(LED_CMD_SOLID_BLUE):
-                {
-                    led_struct_fill(&local_led, 0, 0, 20, 0);
-                }
-                break;
-                case(LED_CMD_BLINK_YELLOW):
-                {
-                    led_struct_fill(&local_led, 30, 20, 0, LED_BLINK_PERIOD);
-                }
-                break;
-                case(LED_CMD_SOLID_YELLOW):
-                {
-                    led_struct_fill(&local_led, 30, 20, 0, 0);
-                }
-                break;
-                case(LED_CMD_BLINK_RED):
-                {
-                    led_struct_fill(&local_led, 20, 0, 0, LED_BLINK_PERIOD);
-                }
-                break;
-                default:
-                {
-                    ESP_LOGE(LED_TAG, "Unknown LED state\r\n");
-                }
-                break;
+                led_struct_fill(&local_led, 0, 0, 0, 0);
+            }
+            if(led_state_bits & BIT(LED_CMD_BLINK_GREEN))
+            {
+                led_struct_fill(&local_led, 0, 20, 0, LED_BLINK_PERIOD);
+            }
+            if (led_state_bits & BIT(LED_CMD_SOLID_GREEN))
+            {
+                led_struct_fill(&local_led, 0, 20, 0, 0);
+            }
+            if (led_state_bits & BIT(LED_CMD_BLINK_BLUE))
+            {
+                led_struct_fill(&local_led, 0, 0, 20, LED_BLINK_PERIOD);
+            }
+            if (led_state_bits & BIT(LED_CMD_SOLID_BLUE))
+            {
+                led_struct_fill(&local_led, 0, 0, 20, 0);
+            }
+            if (led_state_bits & BIT(LED_CMD_BLINK_YELLOW))
+            {
+                led_struct_fill(&local_led, 30, 20, 0, LED_BLINK_PERIOD);
+            }
+            if (led_state_bits & BIT(LED_CMD_SOLID_YELLOW))
+            {
+                led_struct_fill(&local_led, 30, 20, 0, 0);
+            }
+            if (led_state_bits & BIT(LED_CMD_BLINK_RED))
+            {
+                led_struct_fill(&local_led, 20, 0, 0, LED_BLINK_PERIOD);
             }
         }
         led_write_refresh(&led_strip, &local_led);
