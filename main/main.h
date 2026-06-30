@@ -13,6 +13,8 @@
 #include "measure.h"
 #include "button.h"
 #include "user_led.h"
+#include "user_ota_update.h"
+
 
 #include "sdkconfig.h"
 

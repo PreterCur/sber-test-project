@@ -92,6 +92,7 @@ void led_task_handler(void *pvParameters)
         BaseType_t led_notify_ret = xTaskNotifyWait(0x00, ULONG_MAX, &led_state_bits, pdMS_TO_TICKS(10));
         if (led_notify_ret == pdPASS)
         {
+            // led_strip_clear(led_strip);
             if (led_state_bits & BIT(LED_CMD_OFF))
             {
                 led_struct_fill(&local_led, 0, 0, 0, 0);

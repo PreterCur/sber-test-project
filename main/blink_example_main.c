@@ -148,6 +148,71 @@ void director_task(void *pvParameters)
                             break;
                             case(EVT_BUTTON_LONG_CLICK):
                             {
+                                ESP_LOGI(DIRECTOR_TAG, "Long click detected, Starting OTA Sequence");
+                                current_state = STATE_OTA_CHECKING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+
+                                //WIFI was started by measure task
+                                // esp_err_t wifi_init_ret = wifi_station_init(EXAMPLE_ESP_WIFI_SSID, sizeof(EXAMPLE_ESP_WIFI_SSID), EXAMPLE_ESP_WIFI_PASS, sizeof(EXAMPLE_ESP_WIFI_PASS));
+                                // ESP_ERROR_CHECK(wifi_init_ret);
+                                esp_err_t wifi_connect_ret = wifi_config_connect();
+                                ESP_ERROR_CHECK(wifi_connect_ret);
+
+                                char available_version[32] = {0, };
+                                esp_err_t get_vers_ret = get_available_version(available_version, sizeof(available_version));
+                                if (get_vers_ret != ESP_OK)
+                                {
+                                    ESP_LOGE(DIRECTOR_TAG, "OTA Version Check failed");
+                                    generic_event_t get_version_failed_evt = 
+                                    {
+                                        .comp_id = COMP_ID_MAIN,
+                                        .event_id = EVT_OTA_GET_VERS_ERROR,
+                                        .param = 0
+                                    };
+                                    BaseType_t get_vers_q_ret = xQueueSend(*task_cfg_p->evt_queue, &get_version_failed_evt, 0);
+                                    if (get_vers_q_ret != pdTRUE)
+                                    {
+                                        ESP_LOGE(DIRECTOR_TAG, "Failed to write to evt queue from OTA Get Version\r\n");
+                                        break;
+                                    }
+                                    break;
+                                }
+
+                                ESP_LOGI(DIRECTOR_TAG, "Available firmware version: %s", available_version);
+                                const esp_app_desc_t *app_desc = esp_app_get_description();
+                                if (strcmp(app_desc->version, available_version) == 0) 
+                                {
+                                    ESP_LOGI(DIRECTOR_TAG, "Firmware is already up to date.");
+                                    generic_event_t version_recent_evt = 
+                                    {
+                                        .comp_id = COMP_ID_MAIN,
+                                        .event_id = EVT_OTA_FW_UP_TO_DATE,
+                                        .param = 0
+                                    };
+                                    BaseType_t recent_vers_q_ret = xQueueSend(*task_cfg_p->evt_queue, &version_recent_evt, 0);
+                                    if (recent_vers_q_ret != pdTRUE)
+                                    {
+                                        ESP_LOGE(DIRECTOR_TAG, "Failed to write to evt queue from OTA Get Version\r\n");
+                                        break;
+                                    }
+
+                                    current_state = STATE_IDLE;
+                                    state_update_led(*task_cfg_p->led_task, current_state);
+                                    break;
+                                }
+                                
+                                generic_event_t ota_vers_update_ready_evt = 
+                                {
+                                    .comp_id = COMP_ID_MAIN,
+                                    .event_id = EVT_OTA_VERSION_UPDATE_READY,
+                                    .param = 0
+                                };
+                                BaseType_t vers_update_q_ret = xQueueSend(*task_cfg_p->evt_queue, &ota_vers_update_ready_evt, 0);
+                                if (vers_update_q_ret != pdTRUE)
+                                {
+                                    ESP_LOGE(DIRECTOR_TAG, "Failed to write to evt queue from BUF_FULL\r\n");
+                                    break;
+                                }
 
                             }
                             break;
@@ -175,11 +240,6 @@ void director_task(void *pvParameters)
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "Send BTN interrupt cmd to measure task\r\n");
                                 xTaskNotify(*task_cfg_p->measure_task, BIT(MEASURE_BTN_INTERRUPT), eSetBits);
-                            }
-                            break;
-                            case(EVT_BUTTON_LONG_CLICK):
-                            {
-
                             }
                             break;
                             default:
@@ -297,12 +357,83 @@ void director_task(void *pvParameters)
                 break;
                 case (STATE_OTA_CHECKING):
                 {
+                    if (evt_queue_recv.comp_id == COMP_ID_MAIN)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_OTA_GET_VERS_ERROR):
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "OTA Check failed EVT");
+                                current_state = STATE_ERROR;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            case(EVT_OTA_FW_UP_TO_DATE):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "Latest FW, going back to IDLE");
+                                current_state = STATE_IDLE;
+                                state_update_led(*task_cfg_p->led_task, current_state);
+                            }
+                            break;
+                            case(EVT_OTA_VERSION_UPDATE_READY):
+                            {
+                                ESP_LOGI(DIRECTOR_TAG, "OTA FW Update available, starting update");
+                                current_state = STATE_OTA_UPDATING;
+                                state_update_led(*task_cfg_p->led_task, current_state);
 
+                                generic_event_t ota_start_evt = 
+                                {
+                                    .comp_id = COMP_ID_MAIN,
+                                    .event_id = EVT_OTA_UPDATE_STARTING,
+                                    .param = 0
+                                };
+                                BaseType_t upd_start_q_ret = xQueueSend(*task_cfg_p->evt_queue, &ota_start_evt, 0);
+                                if (upd_start_q_ret != pdTRUE)
+                                {
+                                    ESP_LOGE(DIRECTOR_TAG, "Failed to write to evt queue from OTA UPDATE READY\r\n");
+                                    break;
+                                }
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported OTA EVT");
+                            }
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGE(DIRECTOR_TAG, "Unsupported OTA EVT Source");
+                    }
                 }
                 break;
                 case (STATE_OTA_UPDATING):
                 {
-
+                    if (evt_queue_recv.comp_id == COMP_ID_MAIN)
+                    {
+                        switch(evt_queue_recv.event_id)
+                        {
+                            case(EVT_OTA_UPDATE_STARTING):
+                            {
+                                esp_err_t update_ret = execute_https_ota_update();
+                                if (update_ret != ESP_OK)
+                                {
+                                    ESP_LOGE(DIRECTOR_TAG, "Failed to exec update, retcode = %s", esp_err_to_name(update_ret));
+                                    current_state = STATE_ERROR;
+                                    state_update_led(*task_cfg_p->led_task, current_state);
+                                    break;
+                                }
+                            }
+                            break;
+                            default:
+                            {
+                                ESP_LOGE(DIRECTOR_TAG, "Only 1 OTA_UPDATING EVT is suppported");
+                            }
+                            break;
+                        }
+                    }
+                    
                 }
                 break;
                 case (STATE_ERROR):
@@ -315,12 +446,12 @@ void director_task(void *pvParameters)
                             {
                                 ESP_LOGI(DIRECTOR_TAG, "BTN Interrupt, getting out of ERR State\r\n");
                                 current_state = STATE_IDLE;
-                                state_update_led(*task_cfg_p->led_task, current_state);
+                                state_update_led(*task_cfg_p->led_task, STATE_IDLE);
                             }
                             break;
                             default:
                             {
-                                ESP_LOGE(DIRECTOR_TAG, "Unsupported ERROR BTN cmd!\r\n");
+                                ESP_LOGE(DIRECTOR_TAG, "Unsupported ERROR BTN EVT!\r\n");
                             }
                             break;
                         }

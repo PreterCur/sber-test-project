@@ -86,7 +86,7 @@ void button_task_handler(void *pvParameters)
                 generic_event_t long_btn_evt = 
                 {
                     .comp_id    = COMP_ID_BUTTON,
-                    .event_id   = EVT_BUTTON_SHORT_CLICK,
+                    .event_id   = EVT_BUTTON_LONG_CLICK,
                     .param      = 0
                 };
                 //wait for 10 ticks if director is not available

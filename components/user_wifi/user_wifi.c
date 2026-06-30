@@ -102,9 +102,13 @@ esp_err_t wifi_station_init(char *ssid, size_t ssid_size, char *password, size_t
         },
     };
 
-    if (ssid_size > sizeof(wifi_config.sta.ssid) || password_size > sizeof(wifi_config.sta.password))
+    if (ssid_size > sizeof(wifi_config.sta.ssid))
     {
-        return -1;
+        return ESP_ERR_WIFI_SSID;
+    }
+    if (password_size > sizeof(wifi_config.sta.password))
+    {
+        return ESP_ERR_WIFI_PASSWORD;
     }
 
     memcpy(wifi_config.sta.ssid, ssid, ssid_size);
